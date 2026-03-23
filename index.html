@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Copernicus — Your data. Your center.</title>
+  <!-- Inline data URI: works on file:// where relative favicon paths often fail -->
+  <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjAgMTIwIj48dGl0bGU+Q29wZXJuaWN1cyBDbjwvdGl0bGU+PHJlY3QgeD0iNyIgeT0iNyIgd2lkdGg9IjEwNiIgaGVpZ2h0PSIxMDYiIHJ4PSIxMyIgZmlsbD0iIzFhMWEyMCIgc3Ryb2tlPSIjZDQ5MTNiIiBzdHJva2Utd2lkdGg9IjMiLz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2MCw1NikiPjx0ZXh0IHg9IjAiIHk9IjAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGRvbWluYW50LWJhc2VsaW5lPSJjZW50cmFsIiBmaWxsPSIjZDQ5MTNiIiBmb250LWZhbWlseT0iU2Vnb2UgVUksc3lzdGVtLXVpLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iNzYiIGZvbnQtd2VpZ2h0PSI3MDAiPkNuPC90ZXh0PjwvZz48L3N2Zz4=" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjAgMTIwIj48dGl0bGU+Q29wZXJuaWN1cyBDbjwvdGl0bGU+PHJlY3QgeD0iNyIgeT0iNyIgd2lkdGg9IjEwNiIgaGVpZ2h0PSIxMDYiIHJ4PSIxMyIgZmlsbD0iIzFhMWEyMCIgc3Ryb2tlPSIjZDQ5MTNiIiBzdHJva2Utd2lkdGg9IjMiLz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2MCw1NikiPjx0ZXh0IHg9IjAiIHk9IjAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGRvbWluYW50LWJhc2VsaW5lPSJjZW50cmFsIiBmaWxsPSIjZDQ5MTNiIiBmb250LWZhbWlseT0iU2Vnb2UgVUksc3lzdGVtLXVpLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iNzYiIGZvbnQtd2VpZ2h0PSI3MDAiPkNuPC90ZXh0PjwvZz48L3N2Zz4=">
+  <style>
+    :root {
+      --bg: #0f0f12;
+      --surface: #1a1a20;
+      --border: #2a2a32;
+      --text: #e8e6e3;
+      --muted: #888;
+      --accent: #d4913b;
+      --accent-dim: #b87a2f;
+      --success: #7cb87a;
+      --error: #c75c5c;
+      --radius: 8px;
+      --font-sans: 'Segoe UI', system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: var(--font-sans);
+      background: var(--bg); color: var(--text);
+      min-height: 100vh; line-height: 1.5;
+    }
+    .layout { max-width: 920px; margin: 0 auto; padding: 1.5rem; }
+    header { border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 1.5rem; }
+    .brand-lockup { display: flex; align-items: center; gap: 0.85rem; margin-bottom: 0.25rem; }
+    .brand-logo {
+      width: 48px; height: 48px; flex-shrink: 0; display: block;
+      border-radius: 10px; box-shadow: 0 0 0 1px var(--border);
+    }
+    .brand-text { min-width: 0; }
+    .brand-text h1 { margin: 0 0 0.2rem 0; }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 0.25rem 0; }
+    .subtitle { color: var(--muted); font-size: 0.9rem; margin: 0; }
+    /* ── Agent dropdown selector ──────────────────────────── */
+    .agent-dropdown { position: relative; margin-bottom: 1rem; }
+    .agent-dropdown-toggle {
+      width: 100%; display: flex; align-items: center; justify-content: space-between;
+      padding: .6rem 1rem; border-radius: var(--radius);
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text); font: inherit; font-size: .95rem; font-weight: 500;
+      cursor: pointer; transition: border-color .15s;
+    }
+    .agent-dropdown-toggle:hover { border-color: var(--accent-dim); }
+    .agent-dropdown-toggle .dd-arrow {
+      font-size: .7rem; color: var(--muted); transition: transform .2s;
+    }
+    .agent-dropdown.open .dd-arrow { transform: rotate(180deg); }
+    .agent-dropdown-list {
+      display: none; margin-top: .35rem;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
+      max-height: 320px; overflow-y: auto;
+    }
+    .agent-dropdown.open .agent-dropdown-list { display: block; }
+    .agent-dropdown-item {
+      padding: .6rem 1rem; cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background .1s;
+    }
+    .agent-dropdown-item:last-child { border-bottom: none; }
+    .agent-dropdown-item:hover { background: #222228; }
+    .agent-dropdown-item.active { background: #222228; border-left: 3px solid var(--accent); }
+    .agent-dropdown-item .dd-name { font-weight: 500; font-size: .9rem; }
+    .agent-dropdown-item .dd-desc {
+      font-size: .8rem; color: var(--muted); margin-top: .15rem;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .panel {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1rem;
+    }
+    .panel h2 { margin: 0 0 .75rem 0; font-size: 1rem; font-weight: 600; }
+    .panel-agent-desc { color: var(--muted); font-size: .9rem; margin: 0 0 1rem 0; line-height: 1.45; }
+    .agent-section { margin-bottom: 1.25rem; }
+    .agent-section-title {
+      font-size: .75rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .04em; color: var(--muted); margin-bottom: .5rem;
+    }
+    .btn {
+      padding: .5rem 1rem; border-radius: 6px; font: inherit; font-weight: 500;
+      cursor: pointer; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text);
+    }
+    .btn:hover { border-color: var(--accent-dim); background: #25252c; }
+    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
+    .btn-primary:disabled { opacity: .6; cursor: not-allowed; }
+    .source-data-list { font-size: .85rem; color: var(--muted); margin-top: .5rem; }
+    .source-data-list div { padding: .25rem 0; border-bottom: 1px solid var(--border); }
+    .source-data-list div:last-child { border-bottom: none; }
+    .agent-actions { margin-top: 1rem; display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; }
+    #result-text { font-weight: 500; margin-bottom: .5rem; }
+    #result-text.result-error { color: var(--error); }
+    #result-json {
+      width: 100%; max-height: 480px; overflow-y: auto; padding: .75rem;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      font-family: ui-monospace, monospace; font-size: .8rem; line-height: 1.55;
+    }
+    /* ── JSON tree ─────────────────────────────────────────── */
+    .jt-node { padding-left: 1.2rem; }
+    .jt-root { padding-left: 0; }
+    .jt-row { white-space: nowrap; }
+    .jt-toggle {
+      display: inline-block; width: 1rem; text-align: center;
+      cursor: pointer; user-select: none; color: var(--muted);
+      font-size: .7rem; vertical-align: middle;
+    }
+    .jt-toggle:hover { color: var(--accent); }
+    .jt-key { color: var(--accent); }
+    .jt-string { color: var(--success); }
+    .jt-number { color: #d19a66; }
+    .jt-bool { color: #c678dd; }
+    .jt-null { color: var(--muted); font-style: italic; }
+    .jt-preview { color: var(--muted); font-style: italic; font-size: .75rem; }
+    .jt-children { }
+    .jt-collapsed > .jt-children { display: none; }
+    .jt-collapsed > .jt-row .jt-toggle::before { content: '▸'; }
+    .jt-expanded > .jt-row .jt-toggle::before { content: '▾'; }
+    /* ── Modal overlay ────────────────────────────────────── */
+    .modal-backdrop {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.65); z-index: 100;
+      align-items: center; justify-content: center;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 1.5rem; width: 460px; max-width: 92vw;
+    }
+    .modal h3 { margin: 0 0 .75rem 0; font-size: 1.05rem; }
+    .modal p { font-size: .9rem; color: var(--muted); margin: 0 0 1rem 0; line-height: 1.5; }
+    .modal .missing-list { margin: 0 0 1rem 0; padding: 0; list-style: none; }
+    .modal .missing-list li {
+      padding: .35rem .6rem; margin-bottom: .35rem; border-radius: 4px;
+      background: var(--bg); font-size: .9rem; color: var(--text);
+    }
+    .modal .missing-list li.loaded { color: var(--success); }
+    .modal-actions { display: flex; gap: .75rem; }
+    /* ── AI Insights panel ─────────────────────────────────── */
+    .ai-header { display: flex; align-items: center; gap: .5rem; margin-bottom: .75rem; }
+    .ai-header h2 { margin: 0; }
+    .ai-badge {
+      font-size: .7rem; padding: .15rem .5rem; border-radius: 10px;
+      background: var(--border); color: var(--muted); font-weight: 500;
+    }
+    .ai-badge.ready { background: rgba(124,184,122,.15); color: var(--success); }
+    .ai-badge.downloading { background: rgba(212,145,59,.15); color: var(--accent); }
+    .ai-badge.unavailable { background: rgba(199,92,92,.1); color: var(--error); }
+    .ai-content {
+      font-size: .9rem; line-height: 1.6; color: var(--text);
+      padding: .75rem; background: var(--bg); border-radius: 6px;
+      border: 1px solid var(--border); min-height: 2.5rem;
+    }
+    .ai-content:empty { display: none; }
+    .ai-content.loading {
+      color: var(--muted); font-style: italic;
+      animation: ai-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes ai-pulse { 0%,100% { opacity: .6; } 50% { opacity: 1; } }
+    .ai-query-row { display: flex; gap: .5rem; margin-top: .75rem; }
+    .ai-input {
+      flex: 1; padding: .5rem .75rem; border-radius: 6px;
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); font: inherit; font-size: .9rem;
+    }
+    .ai-input:focus { border-color: var(--accent); outline: none; }
+    .ai-input::placeholder { color: var(--muted); }
+    .ai-input:disabled { opacity: .5; }
+    .ai-note { font-size: .75rem; color: var(--muted); margin-top: .5rem; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <header>
+      <div class="brand-lockup">
+        <svg class="brand-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="48" height="48" aria-hidden="true" focusable="false" role="img">
+          <title>Copernicus Cn</title>
+          <rect x="7" y="7" width="106" height="106" rx="13" fill="#1a1a20" stroke="#d4913b" stroke-width="3"/>
+          <g transform="translate(60,56)">
+            <text x="0" y="0" text-anchor="middle" dominant-baseline="central" fill="#d4913b" font-family="Segoe UI,system-ui,sans-serif" font-size="76" font-weight="700">Cn</text>
+          </g>
+        </svg>
+        <div class="brand-text">
+          <h1>Copernicus</h1>
+          <p class="subtitle">Your data. Your center. — local-first intelligent agents</p>
+        </div>
+      </div>
+    </header>
+
+    <div id="agent-select" class="agent-dropdown open">
+      <button id="agent-select-btn" type="button" class="agent-dropdown-toggle">
+        <span id="agent-select-label">Select an agent…</span>
+        <span class="dd-arrow">▾</span>
+      </button>
+      <div id="agent-select-list" class="agent-dropdown-list"></div>
+    </div>
+
+    <div id="panel-inputs" class="panel" style="display: none;">
+      <h2 id="agent-title">Agent</h2>
+      <p id="agent-description" class="panel-agent-desc"></p>
+      <div id="agent-body"></div>
+    </div>
+
+    <div id="panel-result" class="panel" style="display: none;">
+      <h2>Result</h2>
+      <div id="result-text"></div>
+      <div id="result-json"></div>
+    </div>
+
+    <div id="panel-ai" class="panel" style="display: none;">
+      <div class="ai-header">
+        <h2>AI Insights</h2>
+        <span id="ai-status" class="ai-badge">checking…</span>
+      </div>
+      <div id="ai-explain" class="ai-content"></div>
+      <div id="ai-query-section">
+        <div class="ai-query-row">
+          <input id="ai-query-input" type="text" class="ai-input"
+                 placeholder="Ask about these results…" disabled />
+          <button id="ai-query-btn" type="button" class="btn btn-primary" disabled>Ask</button>
+        </div>
+        <div id="ai-query-response" class="ai-content" style="margin-top: .75rem;"></div>
+      </div>
+      <div id="ai-note" class="ai-note"></div>
+    </div>
+  </div>
+
+  <!-- Data-loading modal -->
+  <div id="data-modal" class="modal-backdrop">
+    <div class="modal">
+      <h3>Data required</h3>
+      <p id="modal-message">The agent needs banking data that hasn't been loaded yet. Select CSV files below — data stays in memory only.</p>
+      <ul id="modal-types" class="missing-list"></ul>
+      <div class="modal-actions">
+        <button type="button" id="modal-select-btn" class="btn btn-primary">Select files…</button>
+        <button type="button" id="modal-cancel-btn" class="btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/framework.js"></script>
+  <script src="skills/banking.js"></script>
+  <script src="context/local-market.js"></script>
+  <script src="js/ai-engine.js"></script>
+  <script src="js/tools/csv-loader.js"></script>
+  <script src="js/agents/checking-profitability.js"></script>
+  <script src="js/agents/share-of-wallet.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
