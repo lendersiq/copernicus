@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+  <title>Copernicus Cn</title>
+  <rect x="7" y="7" width="106" height="106" rx="13" fill="#1a1a20" stroke="#d4913b" stroke-width="3"/>
+  <g transform="translate(60,56)">
+    <text x="0" y="0" text-anchor="middle" dominant-baseline="central" fill="#d4913b" font-family="Segoe UI,system-ui,sans-serif" font-size="76" font-weight="700">Cn</text>
+  </g>
+</svg>
