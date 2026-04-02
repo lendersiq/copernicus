@@ -1,7 +1,7 @@
 /**
- * Share of Wallet agent — uses Copernicus.Data canonical Account objects.
- * Reads relationship depth weights from Copernicus.Skills.
- * Computes relationship depth + income-based SOW via Copernicus.AI.
+ * Share of Wallet agent — per-customer wallet and relationship strength.
+ * Blends relationship depth with estimated deposit share of household income;
+ * weights and thresholds come from Copernicus.Skills.
  */
 (function (global) {
   'use strict';
@@ -11,7 +11,7 @@
 
   function allCustomerIds(state) {
     var ids = {};
-    ['checking', 'savings', 'cd', 'loans'].forEach(function (t) {
+    ['checking', 'savings', 'cd', 'loans', 'mortgages'].forEach(function (t) {
       var arr = state[t] || [];
       for (var i = 0; i < arr.length; i++) {
         var cid = (arr[i].customerId || '').trim();
@@ -80,6 +80,17 @@
       if (inc2 != null) p.income = inc2;
     });
 
+    (state.mortgages || []).forEach(function (a) {
+      if (a.customerId !== cid) return;
+      p.loanBal += a.balance;
+      p.totalLoans += a.balance;
+      p.hasLoan = true;
+      tenure(a);
+      var loader3 = global.CSVLoader;
+      var inc3 = loader3 && loader3.getIncome ? loader3.getIncome(a.raw && typeof a.raw === 'object' && !Array.isArray(a.raw) ? a.raw : {}) : null;
+      if (inc3 != null) p.income = inc3;
+    });
+
     return p;
   }
 
@@ -122,10 +133,10 @@
   var agent = LA.Agent({
     id: 'share-of-wallet',
     name: 'Share of Wallet',
-    description: 'AI-driven banking Share of Wallet. Infers file types, normalizes columns, segments customers, and computes a single SOW score — all driven by centralized Skills.',
+    description: 'Shows how much of each customer\'s banking likely sits with you versus competitors. Produces a 0–100 Share of Wallet score per customer by combining relationship depth (products held, tenure, primacy signals) with how much of estimated household income their deposits represent. Assigns a relationship segment so you can prioritize growth, retention, and cross-sell. Assumptions and blend weights live in Skills.',
     requiredDataTypes: ['checking', 'savings', 'cd', 'loans'],
     run: function () {
-      var check = LA.Data.ensureLoaded(['checking', 'savings', 'cd', 'loans']);
+      var check = LA.Data.ensureIngested(['checking', 'savings', 'cd', 'loans']);
       if (!check.ok) {
         return { needsData: true, missingTypes: check.missingTypes || [], error: check.error || 'Missing data' };
       }
@@ -196,7 +207,7 @@
           segmentation: segSkill ? segSkill.assumptions : null,
           sowWeights: sowSkill ? sowSkill.assumptions : null
         },
-        loadedFiles: (state.meta && state.meta.files || []).map(function (f) {
+        ingestedFiles: (state.meta && state.meta.files || []).map(function (f) {
           return { name: f.name, type: f.type, rows: f.rowCount };
         })
       };

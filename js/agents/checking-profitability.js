@@ -1,7 +1,8 @@
 /**
  * Checking Profitability agent — checking account data plus a customer directory CSV
  * (customerId → name) for display and references. Discovers profitability columns from
- * raw checking headers. Assumptions from Copernicus.Skills.
+ * raw checking headers via Copernicus.Skills + stem-aware discovery (profit-column-discovery.js).
+ * Assumptions from Copernicus.Skills.
  */
 (function (global) {
   'use strict';
@@ -9,66 +10,11 @@
   var LA = global.Copernicus;
   if (!LA || !LA.Agent) return;
 
-  var PROFIT_SIGNALS = {
-    interestEarned: [
-      'pmtd_interest_earned', 'interest_earned', 'interest earned',
-      'int_earned', 'ytd_interest', 'interest_income', 'int_income'
-    ],
-    serviceCharge: [
-      'pmtd_service_charge', 'service_charge', 'service charge',
-      'monthly_fee', 'maint_fee', 'maintenance_fee', 'account_fee'
-    ],
-    serviceChargeWaived: [
-      'pmtd_service_charge_waived', 'service_charge_waived',
-      'charge_waived', 'fee_waived', 'waived_fee'
-    ],
-    otherCharges: [
-      'pmtd_other_charges', 'other_charges', 'other charges',
-      'misc_charges', 'misc_fees', 'other_fees'
-    ],
-    otherChargesWaived: [
-      'pmtd_other_charges_waived', 'other_charges_waived',
-      'other_waived', 'misc_waived'
-    ],
-    numDeposits: [
-      'pmtd_number_of_deposits', 'number_of_deposits', 'num_deposits',
-      'deposit_count', 'number_of_credits', 'num_credits'
-    ],
-    numChecks: [
-      'pmtd_checks', 'number_of_checks', 'check_count',
-      'num_checks', 'number_of_debits', 'num_debits'
-    ],
-    numNSF: [
-      'pmtd_number_of_items_nsf', 'number_of_items_nsf', 'nsf_count',
-      'nsf_items', 'nsf', 'nsf_number', 'items_nsf'
-    ],
-    avgBalance: [
-      'previous_average_balance', 'average_balance', 'avg_balance',
-      'avg_bal', 'mean_balance'
-    ]
-  };
-
-  function normHeader(h) {
-    return h.toLowerCase().replace(/[\s\-\.]+/g, '_').trim();
-  }
-
   function discoverProfitColumns(headers) {
-    var map = {};
-    for (var role in PROFIT_SIGNALS) {
-      var signals = PROFIT_SIGNALS[role];
-      for (var i = 0; i < headers.length; i++) {
-        var h = normHeader(headers[i]);
-        for (var s = 0; s < signals.length; s++) {
-          var sig = signals[s].replace(/[\s\-\.]+/g, '_');
-          if (h === sig || h.indexOf(sig) !== -1) {
-            map[role] = i;
-            break;
-          }
-        }
-        if (map[role] != null) break;
-      }
+    if (LA.tools && typeof LA.tools.discoverCheckingProfitColumns === 'function') {
+      return LA.tools.discoverCheckingProfitColumns(headers, LA);
     }
-    return map;
+    return {};
   }
 
   function numFromRaw(raw, colIdx) {
@@ -84,12 +30,12 @@
     description: 'Analyzes checking account profitability per customer using credit-for-funding, fee revenue, and processing costs — all driven by centralized Skills. Requires a customer directory file mapping customerId to name (e.g. Portfolio + fullname).',
     requiredDataTypes: ['checking', 'customers'],
     run: function () {
-      var check = LA.Data.ensureLoaded(['checking', 'customers']);
+      var check = LA.Data.ensureIngested(['checking', 'customers']);
       if (!check.ok) {
         return {
           needsData: true,
           missingTypes: check.missingTypes || ['checking', 'customers'],
-          error: check.error || 'Load checking account data and a customer directory CSV (customerId → name) to begin.'
+          error: check.error || 'Ingest checking account data and a customer directory CSV (customerId → name) to begin.'
         };
       }
 
@@ -107,16 +53,16 @@
       var state = LA.Data.getState();
       var customerDirectory = state.customerDirectory || {};
       var loader = global.CSVLoader;
-      if (!loader) return { error: 'CSV loader not available' };
+      if (!loader) return { error: 'CSV ingestion path not available' };
       var mem = loader.getInMemoryStore();
 
       var checkingHeaders = null;
-      var checkingColumnMap = null;
+      var checkingFieldMap = null;
       if (mem && mem.files) {
         for (var f = 0; f < mem.files.length; f++) {
           if (mem.files[f].type === 'checking' && mem.files[f].headers && mem.files[f].headers.length) {
             checkingHeaders = mem.files[f].headers;
-            checkingColumnMap = mem.files[f].columnMap;
+            checkingFieldMap = mem.files[f].fieldMap;
             break;
           }
         }
@@ -254,8 +200,8 @@
         unprofitableCount: results.length - profitable,
         totalMonthlyProfit: round2(totalProfit),
         totalBalance: round2(totalBal),
-        discoveredColumns: discovered,
-        columnMapping: simplifyMap(checkingColumnMap),
+        discoveredProfitFields: discovered,
+        fieldMapping: simplifyMap(checkingFieldMap),
         skills: {
           creditForFunding: { rate: (ecrRate * 100).toFixed(2) + '%', source: 'banking.credit-for-funding' },
           processingCosts: {
