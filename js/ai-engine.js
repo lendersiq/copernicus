@@ -1,6 +1,6 @@
 /**
- * Copernicus AI Engine — custom NLP, statistical classifier, intent parser,
- * and insight generator. Zero external dependencies. Works in any browser.
+ * Copernicus AI Engine — NLP, statistical classifier, intent parser, insight generator.
+ * Zero external dependencies. Works in any browser.
  */
 (function (global) {
   'use strict';
@@ -96,15 +96,15 @@
   }
 
   /* ================================================================
-   * Section 2: Column Classifier — TF-IDF + value patterns
+   * Section 2: Field Classifier — TF-IDF + value patterns
    * ================================================================ */
 
   var ROLE_TEMPLATES = {
-    customerId: 'portfolio customer id cif member number client holder borrower obligor primary key identifier person owner',
-    accountId: 'account number id contract loan certificate acct note agreement reference',
+    customerId: 'portfolio relationship household party cif member customer id client holder borrower obligor primary key identifier person owner taxpayer cust relationship_id',
+    /* accountId is not header-classified here — CSVLoader only maps it on exact header-alias match. */
     balance: 'balance current principal outstanding ledger available collected amount total',
     rate: 'rate interest apr apy statement coupon yield percentage annual',
-    term: 'term tenor months period duration maturity length code',
+    term: 'term tenor months month mth mo period duration maturity length year years yrs',
     dateOpened: 'open date opened origination account start begin effective',
     maturityDate: 'maturity date expiration expire matures end payoff',
     typeCode: 'class code type account product category kind classification',
@@ -120,7 +120,7 @@
     }
   })();
 
-  function classifyColumnHeader(header) {
+  function classifyFieldHeader(header) {
     var tokens = expandSynonyms(tokenizeStemmed(header));
     var vec = bagOfWords(tokens);
     var scores = [];
@@ -131,7 +131,156 @@
     return scores;
   }
 
-  function classifyColumnValues(values) {
+  /**
+   * Headers that describe credit quality / buckets — never relationship customer identifiers.
+   * Portfolio / CIF / member fields stay allowed (explicit positives elsewhere).
+   */
+  function isRiskOrRatingLikeCustomerIdHeader(header) {
+    var s = String(header || '').toLowerCase().replace(/[\s_\-]+/g, ' ').trim();
+    if (!s) return false;
+    if (s.indexOf('portfolio') !== -1 || s.indexOf('customer id') !== -1 || s.indexOf('customer number') !== -1) return false;
+    if (s.indexOf('customer') !== -1 && (s.indexOf('id') !== -1 || s.indexOf('number') !== -1 || s.indexOf('no') !== -1)) return false;
+    if (/\brisk\b/.test(s) && /\brating\b/.test(s)) return true;
+    if (/\bcredit\s+rating\b/.test(s) || /\bloan\s+grade\b/.test(s) || /\brisk\s+grade\b/.test(s)) return true;
+    if (/\bpass\s*fail\b/.test(s) || /\bpassfail\b/.test(s)) return true;
+    if (/\b(pd|lgd)\b/.test(s) || /\bprobability\s+of\s+default\b/.test(s)) return true;
+    if (/\bfico\b/.test(s) || s.indexOf('credit score') !== -1) return true;
+    if (/\b(rating|grade)\b/.test(s) && s.indexOf('operating') === -1 && s.indexOf('interest') === -1 && s.indexOf('statement') === -1) return true;
+    return false;
+  }
+
+  /** Values are mostly parsed numbers with real fractional parts — balances/rates, not stable string ids. */
+  function valuesPredominantlyFractionalNumeric(values) {
+    if (!values || !values.length) return false;
+    var ne = values.filter(function (v) { return v != null && String(v).trim() !== ''; });
+    if (ne.length < 2) return false;
+    var numeric = 0;
+    var frac = 0;
+    for (var i = 0; i < ne.length; i++) {
+      var raw = String(ne[i]).trim();
+      if (/^\d{1,2}[\/\-]\d{1,2}/.test(raw) || /^\d{4}[\/\-]\d{1,2}/.test(raw)) continue;
+      var s = raw.replace(/[$,€£¥%\s,]/g, '');
+      if (!/^[\-+]?[\d.]+(?:e[+\-]?\d+)?$/i.test(s)) continue;
+      var n = parseFloat(s);
+      if (isNaN(n)) continue;
+      numeric++;
+      var intish = Math.abs(n - Math.round(n)) < 1e-9;
+      if (raw.indexOf('.') !== -1 && !intish) frac++;
+      else if (/e[+\-]?\d/i.test(s)) frac++;
+    }
+    if (numeric < Math.max(2, Math.ceil(ne.length * 0.65))) return false;
+    return frac / numeric >= 0.4;
+  }
+
+  /** Values look like a small ordinal / letter grade bucket, not a stable customer key. */
+  function isImplausibleCustomerIdValues(values) {
+    if (!values || !values.length) return false;
+    var nonEmpty = values.filter(function (v) { return v != null && String(v).trim() !== ''; });
+    if (nonEmpty.length < 3) return false;
+    if (valuesPredominantlyFractionalNumeric(nonEmpty)) return true;
+    var uniqueVals = {};
+    var short = 0;
+    var n = nonEmpty.length;
+    var sumLen = 0;
+    for (var i = 0; i < n; i++) {
+      var s = String(nonEmpty[i]).trim();
+      uniqueVals[s] = true;
+      sumLen += s.length;
+      if (s.length <= 2) short++;
+    }
+    var uniq = Object.keys(uniqueVals).length;
+    var avgLen = sumLen / n;
+    if (short / n >= 0.85 && uniq <= 15 && avgLen <= 2.5) return true;
+    if (uniq <= 8 && avgLen <= 2 && n >= 8) return true;
+    return false;
+  }
+
+  /** Loan tenor in months: 1, or any multiple of 3 from 3 through 480 (matches csv-loader heuristic). */
+  function isPlausibleLoanTermMonthHeuristic(n) {
+    if (typeof n !== 'number' || isNaN(n) || n !== Math.floor(n)) return false;
+    if (n < 1 || n > 480) return false;
+    if (n === 1) return true;
+    return n % 3 === 0;
+  }
+
+  function normHeaderForRole(h) {
+    return String(h || '').toLowerCase().replace(/[\s_\-]+/g, ' ').trim();
+  }
+
+  /** Unambiguous banking headers — fixes greedy swaps when value patterns tie. */
+  function isDefiniteOwnerCodeHeaderNorm(n) {
+    if (!n) return false;
+    if (!/\bcode\b/.test(n)) return false;
+    if (!/\bowner\b/.test(n) && !/\bownership\b/.test(n)) return false;
+    if (/\b(type|class|product|category)\s+code\b/.test(n)) return false;
+    if (/\btype\b/.test(n) && !/\bowner\b/.test(n)) return false;
+    return true;
+  }
+
+  function isDefiniteTypeCodeHeaderNorm(n) {
+    if (!n) return false;
+    if (!/\bcode\b/.test(n)) return false;
+    if (/\bowner\b/.test(n) && !/\b(type|class|product|category|segment|subtype)\b/.test(n)) return false;
+    if (/\btype\s+code\b/.test(n) || /\bclass\s+code\b/.test(n) || /\bproduct\s+code\b/.test(n) ||
+        /\bcategory\s+code\b/.test(n) || /\bsegment\s+code\b/.test(n) || /\bsubtype\s+code\b/.test(n)) return true;
+    if (/\btype\b/.test(n) && /\bcode\b/.test(n) && !/\bowner\b/.test(n)) return true;
+    if (/\bclass\b/.test(n) && /\bcode\b/.test(n) && !/\bowner\b/.test(n)) return true;
+    if ((/\bproduct\b/.test(n) || /\bcategory\b/.test(n) || /\bsegment\b/.test(n) || /\bsubtype\b/.test(n)) &&
+        /\bcode\b/.test(n) && !/\bowner\b/.test(n)) return true;
+    return false;
+  }
+
+  /**
+   * After cosine/value fusion, pin typeCode and ownerCode to fields whose headers name them.
+   */
+  function reconcileTypeOwnerCodeMappings(headers, improved) {
+    if (!headers || !headers.length || !improved) return;
+    var typeIdx = -1;
+    var ownerIdx = -1;
+    for (var i = 0; i < headers.length; i++) {
+      var n = normHeaderForRole(headers[i]);
+      if (isDefiniteTypeCodeHeaderNorm(n) && typeIdx < 0) typeIdx = i;
+      if (isDefiniteOwnerCodeHeaderNorm(n) && ownerIdx < 0) ownerIdx = i;
+    }
+    if (typeIdx < 0 && ownerIdx < 0) return;
+
+    var PIN = 9.5;
+    if (typeIdx >= 0 && ownerIdx >= 0 && typeIdx !== ownerIdx) {
+      improved.typeCode = {
+        index: typeIdx,
+        header: headers[typeIdx],
+        confidence: PIN,
+        source: 'ai-engine'
+      };
+      improved.ownerCode = {
+        index: ownerIdx,
+        header: headers[ownerIdx],
+        confidence: PIN,
+        source: 'ai-engine'
+      };
+      return;
+    }
+    if (typeIdx >= 0) {
+      var exT = improved.typeCode;
+      improved.typeCode = {
+        index: typeIdx,
+        header: headers[typeIdx],
+        confidence: Math.max(PIN, exT && exT.confidence != null ? exT.confidence : 0),
+        source: 'ai-engine'
+      };
+    }
+    if (ownerIdx >= 0) {
+      var exO = improved.ownerCode;
+      improved.ownerCode = {
+        index: ownerIdx,
+        header: headers[ownerIdx],
+        confidence: Math.max(PIN, exO && exO.confidence != null ? exO.confidence : 0),
+        source: 'ai-engine'
+      };
+    }
+  }
+
+  function classifyFieldValues(values, headerOpt) {
     if (!values || !values.length) return {};
     var nonEmpty = values.filter(function (v) { return v != null && String(v).trim() !== ''; });
     if (!nonEmpty.length) return {};
@@ -176,6 +325,13 @@
     var max = numericVals.length ? Math.max.apply(null, numericVals) : 0;
     var min = numericVals.length ? Math.min.apply(null, numericVals) : 0;
 
+    var plausibleTermNumeric = 0;
+    for (var ti = 0; ti < numericVals.length; ti++) {
+      var tv = numericVals[ti];
+      if (tv >= 1 && tv === Math.floor(tv) && isPlausibleLoanTermMonthHeuristic(Math.floor(tv))) plausibleTermNumeric++;
+    }
+    var plausibleTermRatio = numericVals.length ? plausibleTermNumeric / numericVals.length : 0;
+
     var signals = {};
 
     if (numericRatio > 0.9 && avg > 0 && avg < 20 && max < 100) {
@@ -184,28 +340,49 @@
     if (numericRatio > 0.9 && max > 100 && avg > 50) {
       signals.balance = 0.7;
     }
-    if (numericRatio > 0.8 && max <= 360 && min >= 0 && avg < 120) {
-      signals.term = 0.5;
+    if (numericRatio > 0.8 && max <= 480 && min >= 1 && plausibleTermRatio >= 0.8) {
+      signals.term = 0.55;
+    } else if (numericRatio > 0.8 && max <= 480 && min >= 1 && plausibleTermRatio >= 0.65 && avg < 200) {
+      signals.term = 0.45;
     }
     if (dateRatio > 0.5) {
       signals.dateOpened = 0.7;
       signals.maturityDate = 0.5;
     }
     if (cardinality > 0.3 && cardinality < 0.95 && formatConsistency > 0.5 && numericRatio > 0.8) {
-      signals.customerId = 0.6;
-    }
-    if (cardinality > 0.85 && numericRatio > 0.5) {
-      signals.accountId = 0.5;
+      if (!isImplausibleCustomerIdValues(nonEmpty) && !valuesPredominantlyFractionalNumeric(nonEmpty)) {
+        signals.customerId = 0.6;
+      }
     }
     if (shortRatio > 0.8 && cardinality < 0.15) {
       signals.typeCode = 0.6;
       signals.ownerCode = 0.4;
     }
 
+    var nh = headerOpt ? normHeaderForRole(headerOpt) : '';
+    if (nh) {
+      if (isDefiniteOwnerCodeHeaderNorm(nh)) {
+        signals.ownerCode = Math.max(signals.ownerCode || 0, 0.9);
+        signals.typeCode = Math.min(signals.typeCode || 0, 0.12);
+      } else if (isDefiniteTypeCodeHeaderNorm(nh)) {
+        signals.typeCode = Math.max(signals.typeCode || 0, 0.9);
+        signals.ownerCode = Math.min(signals.ownerCode || 0, 0.12);
+      }
+    }
+
+    if (headerOpt && isRiskOrRatingLikeCustomerIdHeader(headerOpt)) {
+      signals.customerId = 0;
+      signals.typeCode = Math.max(signals.typeCode || 0, 0.65);
+    }
+    if (isImplausibleCustomerIdValues(nonEmpty)) {
+      signals.customerId = 0;
+      signals.typeCode = Math.max(signals.typeCode || 0, 0.55);
+    }
+
     return signals;
   }
 
-  function isTransactionCountColumnHeader(header) {
+  function isTransactionCountFieldHeader(header) {
     var u = String(header || '').toLowerCase().replace(/\s+/g, '_');
     if (/number_of_(credit|debit|deposit|check|item|nsf|transaction)/.test(u)) return true;
     if (/pmtd_number|num_credits|num_debits|num_deposits|num_checks|number_of_items/.test(u)) return true;
@@ -213,35 +390,119 @@
     return false;
   }
 
-  function classifyColumns(headers, sampleRows, existingMap) {
+  function relationshipKeyHeaderBoost(header) {
+    var s = String(header || '').toLowerCase().replace(/[\s_\-]+/g, ' ').trim();
+    if (!s) return 0;
+    if (s.indexOf('portfolio') !== -1) return 0.45;
+    if (s.indexOf('cif') !== -1) return 0.4;
+    if (/\brelationship\b/.test(s) && s.indexOf('id') !== -1) return 0.38;
+    if (/\bmember\b/.test(s) && s.indexOf('id') !== -1) return 0.35;
+    if (s.indexOf('customer') !== -1 && (s.indexOf('id') !== -1 || s.indexOf('number') !== -1)) return 0.4;
+    if (s.indexOf('borrower') !== -1 || s.indexOf('obligor') !== -1) return 0.32;
+    if (s.indexOf('party') !== -1 && s.indexOf('id') !== -1) return 0.3;
+    if (s.indexOf('household') !== -1) return 0.28;
+    return 0;
+  }
+
+  function scoreLendingCustomerIdField(header, values) {
+    if (isTransactionCountFieldHeader(header) || isRiskOrRatingLikeCustomerIdHeader(header)) return -99;
+    if (valuesPredominantlyFractionalNumeric(values)) return -99;
+    var hs = classifyFieldHeader(header);
+    var hdr = 0;
+    for (var i = 0; i < hs.length; i++) {
+      if (hs[i].role === 'customerId') {
+        hdr = hs[i].score;
+        break;
+      }
+    }
+    var vs = classifyFieldValues(values, header);
+    var val = vs.customerId || 0;
+    return hdr * 5.5 + val * 5 + relationshipKeyHeaderBoost(header) * 6;
+  }
+
+  function fieldOccupiedByStrongRole(improved, colIndex, threshold) {
+    var thr = threshold != null ? threshold : 4.0;
+    for (var role in improved) {
+      if (!improved[role] || improved[role].index !== colIndex) continue;
+      if (improved[role].confidence >= thr && role !== 'customerId') return true;
+    }
+    return false;
+  }
+
+  function reconcileCustomerIdMapping(headers, fieldValues, improved, fileType) {
+    var lend = fileType === 'loans' || fileType === 'mortgages';
+    var cur = improved.customerId;
+    var curIdx = cur && cur.index >= 0 ? cur.index : -1;
+    var curBad =
+      curIdx < 0 ||
+      isRiskOrRatingLikeCustomerIdHeader(headers[curIdx]) ||
+      isTransactionCountFieldHeader(headers[curIdx]) ||
+      isImplausibleCustomerIdValues(fieldValues[curIdx]);
+    if (!lend && !curBad) return;
+
+    var bestIdx = -1;
+    var bestScore = -999;
+    for (var ci = 0; ci < headers.length; ci++) {
+      if (fieldOccupiedByStrongRole(improved, ci, 4.5)) continue;
+      var sc = scoreLendingCustomerIdField(headers[ci], fieldValues[ci]);
+      if (sc > bestScore) {
+        bestScore = sc;
+        bestIdx = ci;
+      }
+    }
+    if (bestIdx < 0) return;
+
+    var curScore = curIdx >= 0 ? scoreLendingCustomerIdField(headers[curIdx], fieldValues[curIdx]) : -999;
+    if (curBad || bestScore >= curScore + 0.35) {
+      improved.customerId = {
+        index: bestIdx,
+        header: headers[bestIdx],
+        confidence: Math.max(5.5, Math.min(12, bestScore)),
+        source: 'ai-engine-customerId'
+      };
+    }
+  }
+
+  function classifyFields(headers, sampleRows, existingMap, fileType) {
     var CONFIDENCE_BOOST_THRESHOLD = 4.0;
     if (!existingMap) return existingMap;
 
-    var needsHelp = false;
-    if (!existingMap.customerId || existingMap.customerId.confidence < CONFIDENCE_BOOST_THRESHOLD) needsHelp = true;
-    if (!existingMap.balance || existingMap.balance.confidence < CONFIDENCE_BOOST_THRESHOLD) needsHelp = true;
-    if (!needsHelp) return existingMap;
-
-    var columnValues = [];
+    var fieldValues = [];
     for (var c = 0; c < headers.length; c++) {
       var vals = [];
       for (var r = 0; r < Math.min(20, sampleRows.length); r++) {
         if (sampleRows[r] && sampleRows[r][c] != null) vals.push(sampleRows[r][c]);
       }
-      columnValues.push(vals);
+      fieldValues.push(vals);
     }
+
+    var curIdxProbe = existingMap.customerId && existingMap.customerId.index >= 0 ? existingMap.customerId.index : -1;
+    var curHeaderBad =
+      curIdxProbe >= 0 &&
+      (isRiskOrRatingLikeCustomerIdHeader(headers[curIdxProbe]) ||
+        isImplausibleCustomerIdValues(fieldValues[curIdxProbe]));
+
+    var needsHelp = false;
+    if (!existingMap.customerId || existingMap.customerId.confidence < CONFIDENCE_BOOST_THRESHOLD) needsHelp = true;
+    if (!existingMap.balance || existingMap.balance.confidence < CONFIDENCE_BOOST_THRESHOLD) needsHelp = true;
+    if (curHeaderBad) needsHelp = true;
+    if (fileType === 'loans' || fileType === 'mortgages') needsHelp = true;
+    if (!needsHelp) return existingMap;
 
     var improved = {};
     for (var role in existingMap) improved[role] = existingMap[role];
+    if (curHeaderBad) delete improved.customerId;
 
     for (var ci = 0; ci < headers.length; ci++) {
-      var headerScores = classifyColumnHeader(headers[ci]);
-      var valueSignals = classifyColumnValues(columnValues[ci]);
+      var headerScores = classifyFieldHeader(headers[ci]);
+      var valueSignals = classifyFieldValues(fieldValues[ci], headers[ci]);
 
       for (var si = 0; si < headerScores.length; si++) {
         var hs = headerScores[si];
         if (hs.score < 0.1) continue;
-        if (hs.role === 'customerId' && isTransactionCountColumnHeader(headers[ci])) continue;
+        if (hs.role === 'customerId' && isTransactionCountFieldHeader(headers[ci])) continue;
+        if (hs.role === 'customerId' && isRiskOrRatingLikeCustomerIdHeader(headers[ci])) continue;
+        if (hs.role === 'customerId' && isImplausibleCustomerIdValues(fieldValues[ci])) continue;
         var valBoost = valueSignals[hs.role] || 0;
         var combined = hs.score * 5 + valBoost * 5;
 
@@ -267,6 +528,17 @@
           }
         }
       }
+    }
+
+    reconcileTypeOwnerCodeMappings(headers, improved);
+    reconcileCustomerIdMapping(headers, fieldValues, improved, fileType);
+
+    var L = global.CSVLoader;
+    if (improved.accountId && improved.accountId.index != null) {
+      var ax = improved.accountId.index;
+      var strictOk = L && typeof L.isStrictAccountIdHeader === 'function' && ax >= 0 && ax < headers.length &&
+        L.isStrictAccountIdHeader(headers[ax]);
+      if (!strictOk) delete improved.accountId;
     }
 
     return improved;
@@ -447,7 +719,7 @@
     var keys = Object.keys(result);
     for (var i = 0; i < keys.length; i++) {
       var k = keys[i];
-      if (k === 'loadedFiles' || k === 'skills' || k === 'meta') continue;
+      if (k === 'ingestedFiles' || k === 'skills' || k === 'meta') continue;
       var v = result[k];
       if (!Array.isArray(v) || !v.length) continue;
       var row = v[0];
@@ -625,8 +897,63 @@
     return Math.abs(a - b) < 1e-6;
   }
 
+  function isFieldSignalGlossaryQuestion(qRaw) {
+    var s = String(qRaw || '').toLowerCase();
+    if (!s.trim()) return false;
+    if (/^\s*how many\b/.test(s) && /\banomal/.test(s) && !/\bwhat\b/.test(s) && !/\bmean\b/.test(s)) return false;
+    if (/\b(top|bottom)\s+\d+\b/.test(s) && !/\b(inferred|source|mapping|anomal|ai-engine|ai engine)\b/.test(s)) return false;
+    if (/\b(average|mean|median|sum|total)\s+(of\s+)?(the\s+)?(row|file|anomal)/i.test(s) &&
+        !/\b(what|explain|meanings?|does)\b/.test(s)) return false;
+
+    return (
+      /\b(inferred|ai[- ]?engine|source\b|mapping|mappings|anomal|severity|confidence)\b/.test(s) ||
+      /\b(field|column)\s+signal\b/.test(s) ||
+      (/\b(what|how|why|explain|difference|versus|vs\b|define|meaning|understand)\b/.test(s) &&
+        /\b(inferred|ai[- ]?engine|mapping|anomal|severity|source|result|test|report|mappings?)\b/.test(s))
+    );
+  }
+
+  function answerFieldSignalGlossaryQuestion(qRaw, result) {
+    if (!result || !result.fieldSignalTest || !result.fieldSignalLexicon) return null;
+    if (!isFieldSignalGlossaryQuestion(qRaw)) return null;
+
+    var q = String(qRaw || '').toLowerCase();
+    var chunks = [];
+
+    var wantsSourceDiff = /\b(difference|versus|vs\b|between|compared|compare)\b/.test(q) &&
+      /\b(inferred|ai[- ]?engine|source)\b/.test(q);
+    if (wantsSourceDiff || (/\b(inferred|ai[- ]?engine)\b/.test(q) && /\b(what|explain|mean)\b/.test(q))) {
+      chunks.push(
+        '**inferred** — The CSV ingestion path’s heuristic grid (header aliases, semantic hints, and value-shape scores) assigned this field to the role first.\n' +
+        '**ai-engine** — Copernicus.AI `classifyFields` then adjusted some slots when its rules fired (for example customerId repair, or pinning product type vs owner code). ' +
+        'If the engine did not change that role, the row still shows **inferred**.'
+      );
+    }
+
+    if (/\banomal/.test(q) ||
+        (/\b(what|explain|mean)\b/.test(q) && /\b(anomal|flag|issue|warn|warning)\b/.test(q))) {
+      chunks.push(
+        '**Anomalies** are deterministic checks from the field-signal agent: they flag likely mis-mappings or gaps (missing customerId/balance, risk header used as id, low confidence, grid disagreement, etc.). ' +
+        'They are not a separate generative model — read the `anomalies` array in the JSON for exact messages.'
+      );
+    }
+
+    if (/\bseverity\b/.test(q)) {
+      chunks.push(
+        '**Severity** — **high**: likely wrong or harmful for downstream agents; **medium**: verify before trusting; **low**: informational (e.g. the score grid slightly prefers another role).'
+      );
+    }
+
+    if (chunks.length) return chunks.join('\n\n');
+    return result.fieldSignalLexicon;
+  }
+
   function executeQuery(parsed, result) {
     var qctx = mergeQueryContext(result);
+    if (result && result.fieldSignalTest) {
+      var gloss = answerFieldSignalGlossaryQuestion(parsed.raw, result);
+      if (gloss) return gloss;
+    }
     var list = getResultRowList(result, qctx);
     if (!list.length) return 'No data available to query.';
 
@@ -870,6 +1197,24 @@
   function explainDrivers(list, result) {
     var lines = [];
 
+    if (result && result.fieldSignalTest) {
+      lines.push(
+        'This agent audits **CSV field → role** mappings (not customer profitability). Each result row is one ingested file.'
+      );
+      for (var csi = 0; csi < list.length; csi++) {
+        var cr = list[csi];
+        var cfn = cr.fileName != null ? cr.fileName : '?';
+        var cac = cr.anomalyCount != null ? cr.anomalyCount : 0;
+        var cmc = cr.mappings && cr.mappings.length != null ? cr.mappings.length : 0;
+        lines.push('• ' + cfn + ' — ' + cac + ' anomaly flag(s), ' + cmc + ' role mapping(s).');
+      }
+      if (result.fieldSignalLexicon) {
+        lines.push('');
+        lines.push(result.fieldSignalLexicon);
+      }
+      return lines.join('\n');
+    }
+
     if (result.profitableCount != null) {
       lines.push(result.profitableCount + ' of ' + list.length + ' customers are profitable (' +
         Math.round(result.profitableCount / list.length * 100) + '%).');
@@ -1072,6 +1417,9 @@
   }
 
   function generateInsights(result, agentName) {
+    if (result && result.fieldSignalTestInsights && result.fieldSignalTest) {
+      return result.fieldSignalTestInsights;
+    }
     var qctxInsight = mergeQueryContext(result);
     var list = getResultRowList(result, qctxInsight);
     if (!list.length) return { summary: 'No data to analyze.', insights: [] };
@@ -1218,8 +1566,23 @@
     return Promise.resolve({ available: true, ready: true, engine: 'Copernicus AI Engine v1.0' });
   };
 
+  function soulAddressingPrefix() {
+    if (!LA.Soul || typeof LA.Soul.getAddressingPrefix !== 'function') return '';
+    try {
+      return LA.Soul.getAddressingPrefix();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function prependSoulPrefix(body) {
+    var pre = soulAddressingPrefix();
+    if (!pre || !body) return body || '';
+    return pre + String(body).replace(/^\s+/, '');
+  }
+
   LA.AI.explain = function (result, agentName, onChunk) {
-    var text = generateSummary(result, agentName);
+    var text = prependSoulPrefix(generateSummary(result, agentName));
     if (onChunk) onChunk(text);
     return Promise.resolve(text);
   };
@@ -1232,11 +1595,15 @@
     } else {
       text = 'Please run an agent first to generate data for querying.';
     }
+    text = prependSoulPrefix(text);
     if (onChunk) onChunk(text);
     return Promise.resolve(text);
   };
 
-  LA.AI.classifyColumns = classifyColumns;
+  LA.AI.classifyFields = classifyFields;
+  LA.AI.isRiskOrRatingLikeCustomerIdHeader = isRiskOrRatingLikeCustomerIdHeader;
+  LA.AI.isImplausibleCustomerIdValues = isImplausibleCustomerIdValues;
+  LA.AI.valuesPredominantlyFractionalNumeric = valuesPredominantlyFractionalNumeric;
   LA.AI.parseQuery = parseQuery;
   LA.AI.getResultRowList = getResultRowList;
   LA.AI.mergeQueryContext = mergeQueryContext;
@@ -1245,7 +1612,5 @@
   LA.AI.generateInsights = generateInsights;
   LA.AI.tokenize = tokenize;
   LA.AI.stem = stem;
-
-  console.log('[Copernicus.AI] AI Engine loaded — NLP, classifier, intent parser, insight engine (zero dependencies)');
 
 })(typeof window !== 'undefined' ? window : this);

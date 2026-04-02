@@ -1,5 +1,5 @@
 /**
- * Copernicus — local-first (file://) JS framework for intelligent agents.
+ * Copernicus — local-first (file://) JS framework for intelligent agents. Local agents, local data.
  * No servers, no Node; runs entirely in the browser.
  * Your data. Your center.
  */
@@ -13,7 +13,7 @@
     Store: (function () {
       var _mem = {};
       var _ls = false;
-      try { _ls = typeof localStorage !== 'undefined' && localStorage !== null; localStorage.setItem('__cn_test', '1'); localStorage.removeItem('__cn_test'); } catch (e) { _ls = false; }
+      try { _ls = typeof localStorage !== 'undefined' && localStorage !== null; localStorage.setItem('__copernicus_test', '1'); localStorage.removeItem('__copernicus_test'); } catch (e) { _ls = false; }
       var prefix = 'copernicus_';
       return {
         prefix: prefix,
@@ -51,7 +51,7 @@
 
     /**
      * Base Agent: id, name, description, run(inputs) -> result.
-     * Optional requiredDataTypes: e.g. ['checking'] — UI lists only matching loaded files.
+     * Optional requiredDataTypes / optionalDataTypes — UI and ensureIngested (see AGENTS.md).
      */
     Agent: function (spec) {
       var agent = {
@@ -62,6 +62,9 @@
       };
       if (spec.requiredDataTypes && spec.requiredDataTypes.length) {
         agent.requiredDataTypes = spec.requiredDataTypes.slice();
+      }
+      if (spec.optionalDataTypes && spec.optionalDataTypes.length) {
+        agent.optionalDataTypes = spec.optionalDataTypes.slice();
       }
       return agent;
     },
@@ -145,7 +148,7 @@
         return Math.round(((depthNorm * dw) + (shareNorm * ww)) * 100) / 100;
       }
 
-      /* explain(), ask(), isAvailable(), getStatus(), classifyColumns()
+      /* explain(), ask(), isAvailable(), getStatus(), classifyFields()
        * are provided by js/ai-engine.js which overrides these after load. */
     },
 
@@ -178,6 +181,9 @@
         }
         if (skill.queryContext) {
           result.queryContext = skill.queryContext;
+        }
+        if (skill.headerSignals) {
+          result.headerSignals = skill.headerSignals;
         }
         return result;
       },
@@ -228,31 +234,33 @@
         savings: [],
         cd: [],
         loans: [],
+        mortgages: [],
         customerDirectory: {},
         meta: { files: [] }
       },
 
-      /** Normalize loader rows into canonical Account objects. */
-      _normalizeFromLoader: function () {
+      /** Normalize ingested rows into canonical Account objects. */
+      _normalizeFromIngestion: function () {
         var loader = (global.CSVLoader || (global.Copernicus && global.Copernicus.tools && global.Copernicus.tools.CSVLoader));
-        if (!loader || !loader.getInMemoryStore) return { ok: false, error: 'CSV loader not available' };
+        if (!loader || !loader.getInMemoryStore) return { ok: false, error: 'CSV ingestion path not available' };
         var mem = loader.getInMemoryStore();
         if (!mem || !mem.files || !mem.files.length) {
           this.state.checking = [];
           this.state.savings = [];
           this.state.cd = [];
           this.state.loans = [];
+          this.state.mortgages = [];
           this.state.customerDirectory = {};
           this.state.meta = { files: [] };
-          return { ok: false, error: 'No CSV data loaded' };
+          return { ok: false, error: 'No CSV data ingested' };
         }
 
         function customerIdMappedHeader(memStore, sourceFile) {
           if (!sourceFile || !memStore || !memStore.files) return null;
           for (var j = 0; j < memStore.files.length; j++) {
             var f = memStore.files[j];
-            if (f.name === sourceFile && f.columnMap && f.columnMap.customerId) {
-              return f.columnMap.customerId.header || null;
+            if (f.name === sourceFile && f.fieldMap && f.fieldMap.customerId) {
+              return f.fieldMap.customerId.header || null;
             }
           }
           return null;
@@ -270,8 +278,8 @@
             productType: productType,
             rowIndexInProduct: rowIndex,
             sourceFile: src,
-            columnMappedAsCustomerId: customerIdMappedHeader(memStore, src),
-            valueFromMappedColumn: row && row.customerId != null && String(row.customerId).trim() !== ''
+            fieldMappedAsCustomerId: customerIdMappedHeader(memStore, src),
+            valueFromMappedField: row && row.customerId != null && String(row.customerId).trim() !== ''
               ? String(row.customerId)
               : '(empty / unmapped)',
             normalizedCustomerId: acc ? acc.customerId : null,
@@ -312,9 +320,9 @@
           };
         }
 
-        var byType = mem.byType || { checking: [], savings: [], cd: [], loans: [], customers: [] };
-        var out = { checking: [], savings: [], cd: [], loans: [] };
-        ['checking', 'savings', 'cd', 'loans'].forEach(function (type) {
+        var byType = mem.byType || { checking: [], savings: [], cd: [], loans: [], mortgages: [], customers: [] };
+        var out = { checking: [], savings: [], cd: [], loans: [], mortgages: [] };
+        ['checking', 'savings', 'cd', 'loans', 'mortgages'].forEach(function (type) {
           var arr = byType[type] || [];
           for (var i = 0; i < arr.length; i++) {
             var row = arr[i];
@@ -323,7 +331,7 @@
 
             if (!acc.customerId) {
               console.warn(
-                '[Copernicus.Data] Row skipped — no customerId after mapping (check CSV column → customerId)',
+                '[Copernicus.Data] Row skipped — no customerId after mapping (check CSV field → customerId)',
                 rowCustomerIdLogContext(mem, row, type, i, acc)
               );
               continue;
@@ -331,7 +339,7 @@
 
             if (acc.customerId === '0') {
               console.warn(
-                '[Copernicus.Data] Weak customerId "0" — verify the correct column is mapped to customerId',
+                '[Copernicus.Data] Weak customerId "0" — verify the correct field is mapped to customerId',
                 rowCustomerIdLogContext(mem, row, type, i, acc)
               );
             }
@@ -344,6 +352,7 @@
         this.state.savings = out.savings;
         this.state.cd = out.cd;
         this.state.loans = out.loans;
+        this.state.mortgages = out.mortgages;
 
         var nameMap = {};
         var crows = byType.customers || [];
@@ -360,23 +369,71 @@
         }
         this.state.customerDirectory = nameMap;
 
-        this.state.meta = { files: (mem.files || []).slice() };
+        var accountCustIds = {};
+        ['checking', 'savings', 'cd', 'loans', 'mortgages'].forEach(function (t) {
+          var arr = out[t] || [];
+          for (var ai = 0; ai < arr.length; ai++) {
+            var id = arr[ai].customerId;
+            if (id) accountCustIds[id] = true;
+          }
+        });
+        var acctKeys = Object.keys(accountCustIds);
+        var matchedToDirectory = 0;
+        for (var mi = 0; mi < acctKeys.length; mi++) {
+          if (nameMap[acctKeys[mi]] != null) matchedToDirectory++;
+        }
+        var dirKeys = Object.keys(nameMap);
+        var hasCustomerFile = (mem.files || []).some(function (f) { return f.type === 'customers'; });
+        var joinHealth = {
+          customerFileRowCount: crows.length,
+          directoryEntries: dirKeys.length,
+          distinctAccountCustomerIds: acctKeys.length,
+          accountIdsMatchedInDirectory: matchedToDirectory,
+          matchRate:
+            acctKeys.length > 0 ? Math.round((matchedToDirectory / acctKeys.length) * 1000) / 1000 : null
+        };
+
+        this.state.meta = { files: (mem.files || []).slice(), customerDirectoryJoin: joinHealth };
+
+        try {
+          if (hasCustomerFile && crows.length > 0 && joinHealth.directoryEntries === 0) {
+            console.warn(
+              '[Copernicus.Data] Customer information file ingested but no directory entries (check customerId + name fields mapped).',
+              joinHealth
+            );
+          } else if (
+            hasCustomerFile &&
+            joinHealth.directoryEntries > 0 &&
+            joinHealth.distinctAccountCustomerIds > 0 &&
+            joinHealth.matchRate !== null &&
+            joinHealth.matchRate < 0.15
+          ) {
+            console.warn(
+              '[Copernicus.Data] Very few account customerIds match the customer directory keys — IDs may use different fields, formatting, or the wrong file was classified as Customer information.',
+              joinHealth
+            );
+          }
+        } catch (eLog) { /* ignore */ }
+
         return { ok: true, state: this.state };
       },
 
       /**
        * Ensure data for requested types exists. Returns:
-       * { ok: true, state } or { ok: false, missingTypes: [...], error? }.
+       * { ok: true, state, optionalDataPresent? } or { ok: false, missingTypes: [...], error? }.
+       * options.optionalTypes — file types that may be absent; reported in optionalDataPresent.
        */
-      ensureLoaded: function (needs) {
+      ensureIngested: function (needs, options) {
         needs = needs && needs.length ? needs : ['checking', 'savings', 'cd', 'loans'];
+        options = options || {};
+        var optionalTypes = options.optionalTypes || [];
         var loader = (global.CSVLoader || (global.Copernicus && global.Copernicus.tools && global.Copernicus.tools.CSVLoader));
         if (!loader || !loader.getInMemoryStore) {
-          return { ok: false, missingTypes: needs.slice(), error: 'CSV loader not available' };
+          return { ok: false, missingTypes: needs.slice(), error: 'CSV ingestion path not available' };
         }
         var mem = loader.getInMemoryStore();
         if (!mem || !mem.files || !mem.files.length) {
-          return { ok: false, missingTypes: needs.slice(), error: 'No CSV data loaded' };
+          return { ok: false, missingTypes: needs.slice(), error: 'No CSV data ingested' };
         }
 
         var missing = [];
@@ -390,7 +447,15 @@
           return { ok: false, missingTypes: missing };
         }
 
-        return this._normalizeFromLoader();
+        var optionalDataPresent = {};
+        for (var oi = 0; oi < optionalTypes.length; oi++) {
+          var ot = optionalTypes[oi];
+          optionalDataPresent[ot] = ((byType[ot] || []).length > 0);
+        }
+
+        var norm = this._normalizeFromIngestion();
+        if (!norm.ok) return norm;
+        return { ok: true, state: this.state, optionalDataPresent: optionalDataPresent };
       },
 
       /** Get current normalized state (may be empty arrays). */
@@ -432,6 +497,7 @@
         collect(s.savings, 'savings', false);
         collect(s.cd, 'cd', false);
         collect(s.loans, 'loans', true);
+        collect(s.mortgages || [], 'loans', true);
         if (!profile.checking.length && !profile.savings.length && !profile.cd.length && !profile.loans.length) {
           return null;
         }

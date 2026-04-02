@@ -11,7 +11,7 @@
   if (!LA) return;
 
   var currentAgentId = '';
-  var pendingRunAfterLoad = false;
+  var pendingRunAfterIngest = false;
   var lastResult = null;
   var lastAgentName = '';
   var aiReady = false;
@@ -96,9 +96,46 @@
           '<div class="agent-section-title">Source data (in-memory only)</div>' +
           '<div id="source-data-files" class="source-data-list"></div>' +
         '</div>' +
+        '<div id="loan-treasury-section" class="agent-section" style="display:none;">' +
+          '<div class="agent-section-title">Treasury rates (BankersIQ)</div>' +
+          '<p style="font-size:.82rem;color:var(--muted);margin:0 0 .75rem 0;line-height:1.45;">' +
+          'Loan spread uses the <strong>BankersIQ</strong> Treasury trates endpoint (<a href="https://bankersiq.com/api/luci/trates/" target="_blank" rel="noopener" style="color:var(--accent);">trates</a>) with your <strong>api_key</strong> (stored only in this browser).' +
+          '</p>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">' +
+          '<input type="password" id="bankersiq-trates-api-key-input" class="ai-input" style="max-width:280px;" placeholder="BankersIQ API key" autocomplete="off" />' +
+          '<button type="button" id="bankersiq-trates-api-key-save" class="btn btn-primary">Save key</button>' +
+          '</div>' +
+          '<div id="bankersiq-trates-key-status" style="font-size:.78rem;margin-top:.3rem;color:var(--muted);"></div>' +
+        '</div>' +
         '<div class="agent-actions">' +
           '<button type="button" id="run-btn" class="btn btn-primary">Run research</button>' +
         '</div>';
+      var loanTreasury = el('loan-treasury-section');
+      if (loanTreasury) {
+        loanTreasury.style.display = agent.id === 'loan-profitability' ? 'block' : 'none';
+      }
+      if (agent.id === 'loan-profitability' && LA.KeyRing && LA.KeyRingIds) {
+        LA.KeyRing.get(LA.KeyRingIds.BANKERSIQ_TRATES_API).then(function (k) {
+          var st = el('bankersiq-trates-key-status');
+          if (st) st.textContent = k ? 'BankersIQ key on file (hidden).' : 'BankersIQ API key required to fetch Treasury rates.';
+        });
+        var biqSave = el('bankersiq-trates-api-key-save');
+        if (biqSave) {
+          biqSave.addEventListener('click', function () {
+            var inp = el('bankersiq-trates-api-key-input');
+            var st = el('bankersiq-trates-key-status');
+            var v = inp && inp.value ? inp.value.trim() : '';
+            if (!v) {
+              if (st) st.textContent = 'Paste your BankersIQ API key to save.';
+              return;
+            }
+            LA.KeyRing.set(LA.KeyRingIds.BANKERSIQ_TRATES_API, v).then(function () {
+              if (st) st.textContent = 'Saved.';
+              if (inp) inp.value = '';
+            });
+          });
+        }
+      }
       updateSourceDataDisplay();
       var runBtn = el('run-btn');
       if (runBtn) runBtn.addEventListener('click', function () { runAgent(); });
@@ -130,10 +167,13 @@
         var r = out.result;
         if (r && r.needsData) {
           showDataModal(r.missingTypes || []);
-          pendingRunAfterLoad = true;
+          pendingRunAfterIngest = true;
           if (resultText) resultText.textContent = '';
           if (resultPanel) resultPanel.style.display = 'none';
           return;
+        }
+        if (r && r.needsBankersIqKey) {
+          if (resultPanel) resultPanel.style.display = 'block';
         }
         showResult(r, null);
         lastResult = r;
@@ -165,10 +205,21 @@
       return;
     }
     if (elResult) elResult.className = '';
-    if (result && result.error) {
+    if (result && result.needsBankersIqKey && result.error) {
+      if (elResult) {
+        var bq = result.error;
+        if (result.riskDisclaimer) bq += '\n\n' + result.riskDisclaimer;
+        elResult.textContent = bq;
+        elResult.className = '';
+      }
+    } else if (result && result.error) {
       if (elResult) { elResult.textContent = result.error; elResult.className = 'result-error'; }
     } else if (result && result.summary) {
-      if (elResult) elResult.textContent = result.summary;
+      if (elResult) {
+        var head = result.summary;
+        if (result.riskDisclaimer) head += '\n\n' + result.riskDisclaimer;
+        elResult.textContent = head;
+      }
     } else if (result && result.customerCount != null) {
       if (elResult) elResult.textContent = 'Processed ' + result.customerCount + ' customers.';
     } else {
@@ -214,7 +265,7 @@
     row.className = 'jt-row';
     var toggle = '<span class="jt-toggle"></span>';
     var keyHtml = key != null ? '<span class="jt-key">' + escapeHtml(String(key)) + '</span>: ' : '';
-    var preview = '<span class="jt-preview">{ ' + keys.length + ' key' + (keys.length !== 1 ? 's' : '') + ' }</span>';
+    var preview = '<span class="jt-preview" title="Expand to see each field">{ ' + keys.length + ' propert' + (keys.length !== 1 ? 'ies' : 'y') + ' }</span>';
     row.innerHTML = toggle + keyHtml + preview;
     row.querySelector('.jt-toggle').addEventListener('click', function () {
       node.classList.toggle('jt-collapsed');
@@ -308,7 +359,7 @@
 
     if (!aiReady) {
       if (explainEl) { explainEl.textContent = ''; explainEl.className = 'ai-content'; }
-      if (noteEl) noteEl.textContent = 'AI Engine not loaded.';
+      if (noteEl) noteEl.textContent = 'AI Engine not available.';
       if (queryInput) queryInput.disabled = true;
       if (queryBtn) queryBtn.disabled = true;
       return;
@@ -320,7 +371,7 @@
     }
     if (queryInput) queryInput.disabled = true;
     if (queryBtn) queryBtn.disabled = true;
-    if (noteEl) noteEl.textContent = 'Powered by Copernicus AI — zero dependencies, all processing on your device.';
+    if (noteEl) noteEl.textContent = 'Powered by Copernicus AI — local agents, local data; processing stays on your device.';
 
     LA.AI.explain(result, agentName, function onChunk(text) {
       if (explainEl) {
@@ -377,8 +428,10 @@
 
   function sourceDataTypeLabel(t) {
     if (!t) return '—';
+    if (t === '__any_csv__') return 'Any CSV';
     if (t === 'cd') return 'CD';
     if (t === 'customers') return 'Customer information';
+    if (t === 'mortgages') return 'Mortgage loans';
     return t.charAt(0).toUpperCase() + t.slice(1);
   }
 
@@ -401,23 +454,36 @@
     var required = agent && agent.requiredDataTypes && agent.requiredDataTypes.length
       ? agent.requiredDataTypes
       : null;
+    var optional = agent && agent.optionalDataTypes && agent.optionalDataTypes.length
+      ? agent.optionalDataTypes
+      : [];
+    var showTypes = null;
+    if (required && required.length) {
+      showTypes = required.slice();
+      for (var si = 0; si < optional.length; si++) {
+        if (showTypes.indexOf(optional[si]) === -1) showTypes.push(optional[si]);
+      }
+    }
 
     var files = mem.files.slice();
-    if (required) {
+    if (showTypes) {
       files = files.filter(function (f) {
-        return f.type && required.indexOf(f.type) !== -1;
+        return f.type && showTypes.indexOf(f.type) !== -1;
       });
       files.sort(function (a, b) {
-        return required.indexOf(a.type) - required.indexOf(b.type);
+        return showTypes.indexOf(a.type) - showTypes.indexOf(b.type);
       });
     }
 
     if (!files.length) {
-      var need = required && required.length
-        ? required.map(sourceDataTypeLabel).join(', ')
+      var need = showTypes && showTypes.length
+        ? showTypes.map(function (t) {
+          var lab = sourceDataTypeLabel(t);
+          return optional.indexOf(t) !== -1 ? lab + ' (optional)' : lab;
+        }).join(', ')
         : 'this agent’s required sources';
       container.innerHTML =
-        '<div>Nothing loaded for <strong>' + escapeHtml(need) + '</strong> yet. ' +
+        '<div>Nothing ingested for <strong>' + escapeHtml(need) + '</strong> yet. ' +
         'Choose <strong>Run research</strong> to add files. (Other files may be in memory but are not shown here.)</div>';
       return;
     }
@@ -441,28 +507,40 @@
     if (!modal || !typesList) return;
 
     typesList.innerHTML = '';
-    var allTypes = ['checking', 'savings', 'cd', 'loans', 'customers'];
+    var msgEl = el('modal-message');
+
+    if (missingTypes.length === 1 && missingTypes[0] === '__any_csv__') {
+      var liAny = document.createElement('li');
+      liAny.textContent = 'One or more banking CSVs (checking, loans, customers, …)';
+      typesList.appendChild(liAny);
+      if (msgEl) {
+        msgEl.textContent = 'Select one or more CSV files. Any supported type is fine — data stays in memory only. Then the run will continue automatically.';
+      }
+      modal.classList.add('open');
+      return;
+    }
+
+    var allTypes = ['checking', 'savings', 'cd', 'loans', 'mortgages', 'customers'];
     var mem = CSVLoader ? CSVLoader.getInMemoryStore() : null;
-    var loadedTypes = {};
+    var ingestedTypes = {};
     if (mem && mem.files) {
-      mem.files.forEach(function (f) { if (f.type) loadedTypes[f.type] = true; });
+      mem.files.forEach(function (f) { if (f.type) ingestedTypes[f.type] = true; });
     }
 
     allTypes.forEach(function (t) {
       var isMissing = missingTypes.indexOf(t) !== -1;
-      var isLoaded = loadedTypes[t];
-      if (!isMissing && !isLoaded) return;
+      var isIngested = ingestedTypes[t];
+      if (!isMissing && !isIngested) return;
       var li = document.createElement('li');
       li.textContent = sourceDataTypeLabel(t) + (isMissing ? '' : ' ✓');
       if (!isMissing) li.className = 'loaded';
       typesList.appendChild(li);
     });
 
-    var msgEl = el('modal-message');
     if (msgEl) {
       msgEl.textContent = missingTypes.length === 1
         ? 'The agent needs ' + missingTypes[0] + ' account data. Select a CSV file below — data stays in memory only.'
-        : 'The agent needs banking data that hasn\'t been loaded yet. Select CSV files below — data stays in memory only.';
+        : 'The agent needs banking data that hasn\'t been ingested yet. Select CSV files below — data stays in memory only.';
     }
 
     modal.classList.add('open');
@@ -471,7 +549,7 @@
   function hideDataModal() {
     var modal = el('data-modal');
     if (modal) modal.classList.remove('open');
-    pendingRunAfterLoad = false;
+    pendingRunAfterIngest = false;
   }
 
   function onModalSelectFiles() {
@@ -482,17 +560,17 @@
     input.onchange = function () {
       var files = input.files;
       if (!files || !files.length) return;
-      if (!CSVLoader || !CSVLoader.loadFiles) return;
+      if (!CSVLoader || !CSVLoader.ingestFiles) return;
 
-      CSVLoader.loadFiles(files).then(function () {
+      CSVLoader.ingestFiles(files).then(function () {
         hideDataModal();
         updateSourceDataDisplay();
-        if (pendingRunAfterLoad) {
-          pendingRunAfterLoad = false;
+        if (pendingRunAfterIngest) {
+          pendingRunAfterIngest = false;
           runAgent();
         }
       }).catch(function (e) {
-        alert('Load failed: ' + (e && e.message || e));
+        alert('Ingestion failed: ' + (e && e.message || e));
       });
     };
     input.click();
@@ -521,6 +599,10 @@
     if (queryInput) queryInput.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAIQuery(); }
     });
+
+    if (LA.Soul && typeof LA.Soul.load === 'function') {
+      LA.Soul.load();
+    }
 
     checkAIStatus();
   }
