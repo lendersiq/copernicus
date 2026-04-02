@@ -140,19 +140,132 @@
     sources: ['SOW composite model']
   });
 
-  /* ── Column Inference Context ──────────────────────────────────────── */
+  /* ── Field Inference Context ──────────────────────────────────────── */
 
   LA.Skills.register({
-    id: 'banking.column-inference',
-    name: 'Column Inference Context',
+    id: 'banking.field-inference',
+    name: 'Field Inference Context',
     domain: 'banking',
     assumptions: {},
-    context: 'In banking CSV files, "Portfolio" typically means customer ID ' +
-      '(the account holder). Common patterns: Statement_Rate = interest rate, ' +
-      'Previous_Average_Balance = balance, PMTD_* = period-to-date metrics. ' +
-      'Customer IDs are typically integers with consistent formatting, ' +
-      'moderate cardinality, and non-monotonic ordering.',
+    context: 'In banking CSV files, "Portfolio" (and CIF, relationship id, member id, borrower id) ' +
+      'is the relationship / customer key — map it to customerId. Risk_Rating, credit grade, PD, LGD, ' +
+      'FICO, and two-character letter buckets are never customer identifiers. ' +
+      'Loan number, note number, contract id belong on the loan reference field, not customerId. ' +
+      'Statement_Rate = interest rate; Previous_Average_Balance = balance; PMTD_* = period-to-date. ' +
+      'Field signal test: Ask about **inferred vs ai-engine**, **anomalies**, or **severity** — the agent ships `fieldSignalLexicon` and the engine answers from that glossary.',
     sources: ['Banking data conventions']
+  });
+
+  /* ── Profit column header signals (checking PMTD / DDA; stem-aware discovery) ── */
+
+  LA.Skills.register({
+    id: 'banking.profit-column-signals',
+    name: 'Profit column header signals',
+    domain: 'banking',
+    assumptions: {},
+    context: 'Header aliases for PMTD and DDA profitability columns on checking extracts. ' +
+      'Bundled as headerSignals.checkingProfitability; matched by js/tools/profit-column-discovery.js.',
+    sources: ['Core banking statement conventions', 'PMTD patterns'],
+    headerSignals: {
+      checkingProfitability: {
+        interestEarned: [
+          'pmtd_interest_earned', 'interest_earned', 'interest earned', 'int_earned',
+          'ytd_interest', 'interest_income', 'int_income', 'interest_credit',
+          'credit_interest', 'earned_interest', 'int_credited', 'interest_accrued',
+          'accrued_interest', 'interest_paid_customer', 'paid_interest',
+          'period_interest', 'mtd_interest', 'cycle_interest', 'stmt_interest',
+          'interest_revenue', 'dividend_earned', 'int_earn', 'pmtd_int_earned',
+          'interest_recognized'
+        ],
+        serviceCharge: [
+          'pmtd_service_charge', 'service_charge', 'service charge', 'monthly_fee',
+          'maint_fee', 'maintenance_fee', 'account_fee', 'service_chg', 'svc_charge',
+          'svc_chg', 'assessed_charge', 'eval_fee', 'periodic_fee', 'account_service_fee',
+          'dda_service_charge', 'mgmt_fee', 'management_fee', 'service_assessment',
+          'monthly_service_fee', 'maint_charge', 'fee_service', 'charge_service'
+        ],
+        serviceChargeWaived: [
+          'pmtd_service_charge_waived', 'service_charge_waived', 'charge_waived',
+          'fee_waived', 'waived_fee', 'waived_service', 'service_waiver',
+          'fee_waiver', 'waiver_service', 'reversal_service_charge', 'svc_charge_waived',
+          'waived_maint', 'forgiven_fee', 'fee_reversal', 'charge_reversal'
+        ],
+        otherCharges: [
+          'pmtd_other_charges', 'other_charges', 'other charges', 'misc_charges',
+          'misc_fees', 'other_fees', 'ancillary_charges', 'miscellaneous_fee',
+          'other_service_charges', 'stop_pay_fee', 'wire_fee', 'overdraft_fee',
+          'od_fee', 'item_fee', 'misc_debit', 'other_debits', 'sundry_charges',
+          'additional_charges'
+        ],
+        otherChargesWaived: [
+          'pmtd_other_charges_waived', 'other_charges_waived', 'other_waived',
+          'misc_waived', 'waived_other', 'misc_fee_waiver', 'od_waiver',
+          'fee_credit_misc', 'charge_credit_other'
+        ],
+        numDeposits: [
+          'pmtd_number_of_deposits', 'number_of_deposits', 'num_deposits',
+          'deposit_count', 'number_of_credits', 'num_credits', 'credit_count',
+          'credit_items', 'deposit_items', 'count_deposits', 'deposits_count',
+          'number_credits', 'ach_credits_count', 'incoming_credits',
+          'credit_transactions', 'num_credit_items', 'pmtd_deposits', 'period_deposits',
+          'deposit_number'
+        ],
+        numChecks: [
+          'pmtd_checks', 'number_of_checks', 'check_count', 'num_checks',
+          'number_of_debits', 'num_debits', 'debit_count', 'checks_paid',
+          'checks_written', 'draft_count', 'num_drafts', 'share_drafts',
+          'ach_debits_count', 'withdrawal_items', 'debit_items', 'check_items',
+          'num_check_paid', 'cleared_checks', 'paid_checks', 'pmtd_debits'
+        ],
+        numNSF: [
+          'pmtd_number_of_items_nsf', 'number_of_items_nsf', 'nsf_count',
+          'nsf_items', 'nsf', 'nsf_number', 'items_nsf', 'nonsufficient_funds',
+          'nonsufficient', 'insufficient_funds', 'insufficient_fund',
+          'returned_item', 'return_items', 'bounced_item', 'od_items_nsf',
+          'nsf_transactions', 'reject_items', 'unpaid_items', 'dishonored_items'
+        ],
+        avgBalance: [
+          'previous_average_balance', 'average_balance', 'avg_balance', 'avg_bal',
+          'mean_balance', 'average_collected_balance', 'collected_average',
+          'avg_collected_balance', 'ledger_average', 'stmt_average_balance',
+          'statement_average', 'cycle_average_balance', 'prior_avg_balance',
+          'avg_ledger_balance', 'mean_daily_balance', 'mdb', 'adb',
+          'average_book_balance', 'avg_book', 'collected_bal_avg'
+        ]
+      }
+    }
+  });
+
+  /* ── Loan profitability (Treasury curve match + spread) ───────────── */
+
+  LA.Skills.register({
+    id: 'banking.loan-profitability',
+    name: 'Loan Profitability',
+    domain: 'banking',
+    assumptions: {
+      defaultTermMonths: 60,
+      annualServicingBps: 25
+    },
+    formulas: {
+      spreadAnnualPct: function (loanRatePct, treasuryPct) {
+        return (loanRatePct != null ? loanRatePct : 0) - (treasuryPct != null ? treasuryPct : 0);
+      },
+      estGrossSpreadMonthly: function (balance, spreadAnnualPct) {
+        return (balance || 0) * ((spreadAnnualPct || 0) / 100) / 12;
+      },
+      estServicingMonthly: function (balance, annualServicingBps) {
+        var bps = annualServicingBps != null ? annualServicingBps : 25;
+        return (balance || 0) * (bps / 10000) / 12;
+      }
+    },
+    context: 'Matches each loan term (months) to a monthly Treasury curve from BankersIQ (HTTPS /api/luci/trates/ with api_key via Copernicus.KeyRing). ' +
+      'Service outages, relay or proxy misconfiguration, and stale API data create interest-rate and spread risk in reported margins. ' +
+      'Spread = note rate minus matched Treasury (annual %). Gross monthly spread = balance × spread / 12. ' +
+      'Net subtracts servicing as balance × (annualServicingBps/10000) / 12. Not ALM, FTP, hedge, or OAS.',
+    sources: [
+      'BankersIQ — Treasury rates by term (trates)',
+      'https://bankersiq.com/api/luci/trates/'
+    ]
   });
 
   /* ── Query context (NL → fields) — referenced by banking agents; engine stays domain-agnostic ── */
@@ -189,7 +302,11 @@
         { key: 'accountCount', labels: ['accounts', 'account count', 'number of accounts'], fmt: 'int' },
         { key: 'shareOfWallet', labels: ['sow', 'share of wallet', 'wallet', 'wallet share'], fmt: 'score' },
         { key: 'depthScore', labels: ['depth', 'relationship depth', 'depth score', 'score'], fmt: 'score' },
-        { key: 'totalLoans', labels: ['loans', 'loan', 'loan balance', 'total loans'], fmt: 'dollar' }
+        { key: 'totalLoans', labels: ['loans', 'loan', 'loan balance', 'total loans'], fmt: 'dollar' },
+        { key: 'treasuryAnnualPct', labels: ['treasury', 'treasury yield', 'risk free rate'], fmt: 'pct' },
+        { key: 'spreadAnnualPct', labels: ['spread', 'margin over treasury', 'loan spread'], fmt: 'pct' },
+        { key: 'estNetSpreadMonthly', labels: ['net spread monthly', 'loan contribution', 'monthly spread profit'], fmt: 'dollar' },
+        { key: 'sourceFileType', labels: ['mortgage', 'loans source', 'file type'], fmt: 'text' }
       ]
     }
   });
