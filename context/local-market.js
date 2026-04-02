@@ -11,7 +11,7 @@
  * -----------------------------------------------------------------------------
  * Assumption: average household income  $70,000 / year  (annual)
  *
- * Use: When loaded CSVs have no per-customer income, the Share of Wallet
+ * Use: When ingested CSVs have no per-customer income, the Share of Wallet
  * agent uses assumptions.averageHouseholdIncome (with segment multipliers)
  * for the deposit-vs-implied-wallet-pool half of the composite score.
  *
