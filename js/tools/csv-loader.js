@@ -1,15 +1,17 @@
 /**
  * Central CSV loader — in-memory only, bank security edge.
- * Auto-detects delimiter (, ; \t |). Infers file type and column semantics.
+ * Auto-detects delimiter (, ; \t |). Infers file type and field semantics.
  * Produces raw role-mapped rows; Copernicus.Data normalizes to canonical Account objects.
  */
 (function (global) {
   'use strict';
 
-  var FILE_TYPES = ['checking', 'savings', 'cd', 'loans', 'customers'];
+  var FILE_TYPES = ['checking', 'savings', 'cd', 'loans', 'mortgages', 'customers'];
 
-  var COLUMN_ROLES = [
-    'customerId', 'accountId', 'balance', 'dateOpened', 'maturityDate',
+  /* accountId is not inferred here — loan/account numbers are filled from header aliases in rowToObject
+   * so customerId (relationship key, e.g. Portfolio) does not compete with note/account fields. */
+  var FIELD_ROLES = [
+    'customerId', 'balance', 'dateOpened', 'maturityDate',
     'term', 'rate', 'typeCode', 'ownerCode',
     'directDeposit', 'primary', 'income', 'customerName'
   ];
@@ -28,9 +30,16 @@
       'fixed term', 'cod', 'share certificate'
     ],
     loans: [
-      'loan', 'loans', 'lending', 'credit', 'mortgage', 'heloc', 'auto',
+      'loan', 'loans', 'lending', 'credit', 'auto',
       'personal loan', 'line of credit', 'outstanding', 'principal',
-      'note', 'consumer', 'commercial', 'installment'
+      'note', 'consumer', 'commercial', 'installment', 'term loan',
+      'commercial loan', 'consumer loan'
+    ],
+    mortgages: [
+      'mortgage', 'mortgages', 'heloc', 'home equity', 'first lien',
+      'home loan', 'residential', 'fannie', 'freddie', 'ginnie mae',
+      'conforming', 'jumbo mortgage', 'deed of trust', 'fnma', 'fhlmc',
+      'mortgage loan', '1-4 family', 'lien position', 'msr', 'mbs'
     ],
     customers: [
       'customer directory', 'customer list', 'customer names', 'full names',
@@ -39,7 +48,7 @@
     ]
   };
 
-  var COLUMN_SIGNALS = {
+  var FIELD_SIGNALS = {
     customerId: [
       'customer_id', 'customerid', 'cust_id', 'custid', 'client_id',
       'clientid', 'customer id', 'acct_holder', 'account_holder', 'holder',
@@ -76,7 +85,8 @@
     ],
     term: [
       'term', 'term_months', 'tenor', 'duration', 'period', 'term_length',
-      'loan_term', 'months', 'cd_term', 'term_mo'
+      'loan_term', 'months', 'month', 'mth', 'mos', 'mo',
+      'cd_term', 'term_mo', 'year', 'years', 'yrs', 'yr'
     ],
     rate: [
       'rate', 'interest_rate', 'int_rate', 'apy', 'apr', 'annual_rate',
@@ -84,12 +94,12 @@
       'variable_rate', 'rate_pct', 'interest'
     ],
     typeCode: [
-      'account_type', 'type', 'product', 'product_type', 'account type',
+      'type code', 'type_code', 'account_type', 'type', 'product', 'product_type', 'account type',
       'product_code', 'acct_type', 'loan_type', 'product_name', 'category',
-      'class', 'sub_type', 'subtype'
+      'class', 'class code', 'sub_type', 'subtype'
     ],
     ownerCode: [
-      'owner_code', 'ownercode', 'owner', 'ownership', 'ownership_type',
+      'owner code', 'owner_code', 'ownercode', 'owner', 'ownership', 'ownership_type',
       'joint', 'account_owner', 'owner_type', 'registration', 'title_type'
     ],
     directDeposit: [
@@ -223,10 +233,11 @@
     var best = 0;
     for (var i = 0; i < signals.length; i++) {
       var sig = signals[i];
-      if (h === sig) return 10;
-      if (h.indexOf(sig) !== -1 || sig.indexOf(h) !== -1) best = Math.max(best, 6);
+      var ns = typeof sig === 'string' ? norm(sig) : sig;
+      if (h === ns) return 10;
+      if (h.indexOf(ns) !== -1 || ns.indexOf(h) !== -1) best = Math.max(best, 6);
       var tokH = tokenize(h);
-      var tokS = tokenize(sig);
+      var tokS = tokenize(ns);
       for (var j = 0; j < tokS.length; j++) {
         for (var k = 0; k < tokH.length; k++) {
           if (tokH[k] === tokS[j]) best = Math.max(best, 4);
@@ -253,10 +264,6 @@
       'investor', 'shareholder', 'beneficiary', 'titleholder',
       'signatory', 'coreholder'
     ],
-    accountId: [
-      'account', 'acct', 'contract', 'note', 'reference',
-      'instrument', 'facility', 'obligation', 'certificate'
-    ],
     balance: [
       'balance', 'amount', 'value', 'worth', 'principal',
       'outstanding', 'ledger', 'available', 'collected'
@@ -272,10 +279,14 @@
       'rate', 'interest', 'yield', 'apy', 'apr', 'coupon'
     ],
     term: [
-      'term', 'tenor', 'duration', 'period', 'months'
+      'term', 'tenor', 'duration', 'period', 'months', 'month', 'mth', 'mo', 'year', 'years', 'yrs'
     ],
     typeCode: [
-      'class', 'category', 'product', 'type', 'code', 'segment'
+      /* Do not use bare "code" — every Owner_Code / Branch_Code would falsely score as product type. */
+      'class', 'category', 'product', 'type', 'segment', 'subtype'
+    ],
+    ownerCode: [
+      'owner', 'ownership', 'registration', 'joint', 'titleholder'
     ],
     customerName: [
       'name', 'full', 'display', 'legal', 'preferred', 'given', 'surname'
@@ -300,19 +311,45 @@
         }
       }
     }
+    applyTypeOwnerCodeSemanticGuard(header, scores);
     return scores;
   }
 
+  /**
+   * Headers like "Owner_Code" normalize to "owner code" and used to match typeCode via substring "code".
+   * Boost owner vs product-type when unambiguous; never let generic patterns flip obvious names.
+   */
+  function applyTypeOwnerCodeSemanticGuard(header, scores) {
+    var h = norm(header);
+    if (!h) return;
+    var hasOwner = /\bowner\b/.test(h) || /\bownership\b/.test(h);
+    var hasCode = /\bcode\b/.test(h);
+    var hasType = /\btype\b/.test(h);
+    var hasClass = /\bclass\b/.test(h);
+    var hasProduct = /\bproduct\b/.test(h) || /\bcategory\b/.test(h);
+    var hasSegment = /\bsegment\b/.test(h) || /\bsubtype\b/.test(h);
+
+    if (hasOwner && hasCode && !hasType && !hasClass && !hasProduct && !hasSegment) {
+      scores.ownerCode = Math.max(scores.ownerCode || 0, 8);
+      scores.typeCode = Math.min(scores.typeCode || 0, 2);
+      return;
+    }
+    if ((hasType || hasClass || hasProduct || hasSegment) && hasCode && !hasOwner) {
+      scores.typeCode = Math.max(scores.typeCode || 0, 8);
+      scores.ownerCode = Math.min(scores.ownerCode || 0, 2);
+    }
+  }
+
   /* ── Signal 3: Value pattern analysis ───────────────────────────────
-   * Examines actual data to determine column role from value shapes:
+   * Examines actual data to determine field role from value shapes:
    * - customerId: consistent format IDs, moderate cardinality, no decimals
    * - balance: wide-range floats with decimals, often currency
    * - rate: small floats 0–1 or 0–100
    * - date: date patterns
-   * - term: small integers
+   * - term: 1 or multiples of 3 (month counts, 1..480)
    * - typeCode/ownerCode: low-cardinality codes */
 
-  function analyzeColumnValues(colIndex, sampleRows) {
+  function analyzeFieldValues(colIndex, sampleRows) {
     var vals = [];
     for (var i = 0; i < sampleRows.length; i++) {
       var v = sampleRows[i][colIndex];
@@ -335,6 +372,7 @@
     var sumLen = 0;
     var maxAbsInteger = 0;
     var shortLenCount = 0;
+    var plausibleTermMonthCount = 0;
 
     for (var j = 0; j < vals.length; j++) {
       var raw = vals[j];
@@ -357,6 +395,9 @@
           if (ai > maxAbsInteger) maxAbsInteger = ai;
         }
         if (num === Math.floor(num) && Math.abs(num) < 200) smallInt++;
+        if (num >= 1 && num === Math.floor(num) && isPlausibleLoanTermMonthCount(Math.floor(num))) {
+          plausibleTermMonthCount++;
+        }
         if (Math.abs(num) <= 1) smallFloat++;
         else if (Math.abs(num) <= 100 && raw.indexOf('.') !== -1) smallFloat++;
       }
@@ -421,7 +462,8 @@
       allAlphaNum: allAlphaNum,
       avgLen: sumLen / total,
       maxAbsInteger: maxAbsInteger,
-      shortLenRatio: shortLenCount / total
+      shortLenRatio: shortLenCount / total,
+      plausibleTermMonthCount: plausibleTermMonthCount
     };
   }
 
@@ -431,7 +473,6 @@
 
     if (!stats.total || stats.type === 'empty') {
       scores.customerId = 0;
-      scores.accountId = 0;
       scores.balance = 0;
       scores.rate = 0;
       scores.term = 0;
@@ -457,6 +498,8 @@
     if (stats.integerCount === t && stats.floatWithDecimal === 0) scores.customerId += 2;
     if (stats.allAlphaNum && stats.floatWithDecimal === 0) scores.customerId += 1;
     if (!stats.isMonotonic) scores.customerId += 1;
+    /* Relationship / loan ids are not dollar amounts or rates — mostly fractional numerics → not customerId */
+    if (stats.numericCount >= t * 0.85 && stats.floatWithDecimal >= t * 0.35) scores.customerId -= 12;
     if (stats.hasCurrency > 0) scores.customerId -= 5;
     if (stats.dateCount > t * 0.5) scores.customerId -= 5;
 
@@ -475,14 +518,10 @@
     if (!allIntegers && stats.floatWithDecimal === 0 && stats.allAlphaNum && (avgLen >= 5 || maxLen >= 6)) {
       scores.customerId += 2;
     }
-
-    /* accountId: higher cardinality than customerId, consistent format */
-    scores.accountId = 0;
-    if (stats.cardinalityRatio >= 0.8) scores.accountId += 3;
-    if (stats.formatConsistency >= 0.7) scores.accountId += 2;
-    if (stats.integerCount === t && stats.floatWithDecimal === 0) scores.accountId += 1;
-    if (stats.hasCurrency > 0) scores.accountId -= 5;
-    if (stats.dateCount > t * 0.5) scores.accountId -= 5;
+    /* Two-character buckets (risk grades, pass/fail) are not customer identifiers */
+    if (stats.shortLenRatio >= 0.85 && stats.uniqueCount <= 15 && stats.avgLen <= 2.5) {
+      scores.customerId -= 10;
+    }
 
     /* balance: numeric with decimals, wide range, often has currency */
     scores.balance = 0;
@@ -497,10 +536,14 @@
     if (stats.floatWithDecimal >= t * 0.5 && stats.smallFloat >= t * 0.5) scores.rate += 3;
     if (stats.hasCurrency > 0) scores.rate -= 5;
 
-    /* term: small integers */
+    /* term: month counts — 1 or divisible by 3, 1..480 */
     scores.term = 0;
-    if (stats.integerCount >= t * 0.8 && stats.smallInt >= t * 0.7) scores.term += 4;
-    if (stats.floatWithDecimal === 0 && stats.smallInt >= t * 0.5) scores.term += 2;
+    var ptm = stats.plausibleTermMonthCount != null ? stats.plausibleTermMonthCount : 0;
+    var mostlyInts = stats.integerCount >= t * 0.85 ||
+      (stats.numericCount >= t * 0.9 && stats.floatWithDecimal <= t * 0.1);
+    if (mostlyInts && ptm >= t * 0.75) scores.term += 5;
+    else if (ptm >= t * 0.65) scores.term += 3;
+    if (stats.floatWithDecimal === 0 && ptm >= t * 0.5) scores.term += 2;
 
     /* dateOpened / maturityDate: date patterns */
     scores.dateOpened = 0;
@@ -534,19 +577,21 @@
 
   /* ── Multi-signal fusion engine ─────────────────────────────────────
    * Two-phase assignment: non-ID roles first (balance, rate, term, etc.),
-   * then ID roles (customerId, accountId) from remaining columns.
-   * This prevents ambiguous columns like Branch_Number from stealing
-   * the customerId slot — they get claimed by typeCode/term first. */
+   * then customerId from remaining fields. accountId is never inferred
+   * into fieldMap — only filled in rowToObject when a header exactly
+   * matches a known account/loan/note alias (see isStrictAccountIdHeader).
+   * Activity/count-style headers are demoted for customerId so they do not
+   * steal the relationship-key slot. */
 
   var WEIGHT_ALIAS = 0.25;
   var WEIGHT_SEMANTIC = 0.30;
   var WEIGHT_VALUE = 0.45;
 
-  var ID_ROLES_SET = { customerId: true, accountId: true };
+  var ID_ROLES_SET = { customerId: true };
 
   /**
-   * Activity / count columns often look like IDs to value heuristics — never use them as customerId.
-   * (Relationship keys are detected via COLUMN_SIGNALS + semantics: customer_id, relationship_id, etc.)
+   * Activity / count fields often look like IDs to value heuristics — never use them as customerId.
+   * (Relationship keys are detected via FIELD_SIGNALS + semantics: customer_id, relationship_id, etc.)
    */
   function isMisleadingCustomerIdHeader(header) {
     var h = norm(header);
@@ -557,32 +602,57 @@
     if (/(credit|debit|deposit|check|nsf|item|transaction|pmtd)/.test(u) && /(number|num|count|qty|quantity|pmtd)/.test(u)) {
       return true;
     }
+    /* Loan / note identifiers belong on accountId, not customerId */
+    if (/\bloan\s+(number|no|id)\b/.test(h) && !/\bcustomer\b/.test(h)) return true;
+    if (/\bnote\s+(number|no)\b/.test(h)) return true;
+    if (/\bcontract\s+id\b/.test(h) || /\bfacility\s+id\b/.test(h)) return true;
     return false;
   }
 
   function customerIdHeaderScoreAdjust(header) {
-    return isMisleadingCustomerIdHeader(header) ? -18 : 0;
+    if (isMisleadingCustomerIdHeader(header)) return -18;
+    try {
+      var AI = global.Copernicus && global.Copernicus.AI;
+      if (AI && typeof AI.isRiskOrRatingLikeCustomerIdHeader === 'function' &&
+          AI.isRiskOrRatingLikeCustomerIdHeader(header)) {
+        return -24;
+      }
+    } catch (e) { /* ignore */ }
+    return 0;
+  }
+
+  /**
+   * Plausible loan/CD tenor as a month count: 1, or any multiple of 3 from 3 through 480.
+   */
+  function isPlausibleLoanTermMonthCount(n) {
+    if (typeof n !== 'number' || isNaN(n) || n !== Math.floor(n)) return false;
+    if (n < 1 || n > 480) return false;
+    if (n === 1) return true;
+    return n % 3 === 0;
   }
 
   function buildScoreGrid(headers, sampleRows) {
     var colCount = headers.length;
     var colStats = [];
     for (var c = 0; c < colCount; c++) {
-      colStats.push(analyzeColumnValues(c, sampleRows));
+      colStats.push(analyzeFieldValues(c, sampleRows));
     }
     var grid = [];
     for (var ci = 0; ci < colCount; ci++) {
       var row = {};
       var semanticScores = scoreHeaderSemantic(headers[ci]);
       var valueScores = scoreValuePattern(colStats[ci]);
-      COLUMN_ROLES.forEach(function (role) {
-        var aliasS = COLUMN_SIGNALS[role] ? scoreHeaderAlias(headers[ci], COLUMN_SIGNALS[role]) : 0;
+      FIELD_ROLES.forEach(function (role) {
+        var aliasS = FIELD_SIGNALS[role] ? scoreHeaderAlias(headers[ci], FIELD_SIGNALS[role]) : 0;
         var semanticS = semanticScores[role] || 0;
         var valueS = valueScores[role] || 0;
         row[role] = (aliasS * WEIGHT_ALIAS) + (semanticS * WEIGHT_SEMANTIC) + (valueS * WEIGHT_VALUE);
       });
       var cidAdj = customerIdHeaderScoreAdjust(headers[ci]);
       if (cidAdj) row.customerId = Math.max(0, row.customerId + cidAdj);
+      var termAlias = scoreHeaderAlias(headers[ci], FIELD_SIGNALS.term);
+      if (termAlias >= 6) row.term += 2.25;
+      if (termAlias >= 10) row.term += 1.25;
       grid.push(row);
     }
     return grid;
@@ -611,18 +681,16 @@
     }
   }
 
-  function inferColumnRoles(headers, sampleRows) {
+  function inferFieldRoles(headers, sampleRows) {
     var grid = buildScoreGrid(headers, sampleRows);
     var mapping = {};
     var usedCols = {};
     var usedRoles = {};
 
-    var phase1 = COLUMN_ROLES.filter(function (r) { return !ID_ROLES_SET[r]; });
+    var phase1 = FIELD_ROLES.filter(function (r) { return !ID_ROLES_SET[r]; });
     greedyAssign(grid, phase1, mapping, usedCols, usedRoles, headers);
 
-    /* customerId before accountId so a relationship-key column wins over a pure high-cardinality account #. */
     greedyAssign(grid, ['customerId'], mapping, usedCols, usedRoles, headers);
-    greedyAssign(grid, ['accountId'], mapping, usedCols, usedRoles, headers);
 
     if (!mapping.customerId && headers.length > 0) {
       var bestFallback = -1;
@@ -639,18 +707,38 @@
     return mapping;
   }
 
-  /* ── AI-engine column verification ────────────────────────────────────
-   * Uses Copernicus.AI.classifyColumns (from ai-engine.js) to verify
+  /* ── AI-engine field verification ────────────────────────────────────
+   * Uses Copernicus.AI.classifyFields (from ai-engine.js) to verify
    * and improve low-confidence heuristic mappings. Synchronous, zero
    * external dependencies. */
 
   var AI_CONFIDENCE_THRESHOLD = 4.0;
 
-  function verifyWithAIEngine(headers, mapping, sampleRows) {
-    if (global.Copernicus && global.Copernicus.AI && global.Copernicus.AI.classifyColumns) {
-      return global.Copernicus.AI.classifyColumns(headers, sampleRows, mapping);
+  function verifyWithAIEngine(headers, mapping, sampleRows, fileType) {
+    if (global.Copernicus && global.Copernicus.AI && global.Copernicus.AI.classifyFields) {
+      return global.Copernicus.AI.classifyFields(headers, sampleRows, mapping, fileType);
     }
     return mapping;
+  }
+
+  function shouldDiscardRecalledMapping(headers, mapping, sampleData, fileType) {
+    if (!mapping || !mapping.customerId) return true;
+    var ci = mapping.customerId.index;
+    if (ci < 0 || ci >= headers.length) return true;
+    var AI = global.Copernicus && global.Copernicus.AI;
+    if (AI && typeof AI.isRiskOrRatingLikeCustomerIdHeader === 'function' &&
+        AI.isRiskOrRatingLikeCustomerIdHeader(headers[ci])) {
+      return true;
+    }
+    var vals = [];
+    for (var r = 0; r < Math.min(20, sampleData.length); r++) {
+      if (sampleData[r]) vals.push(sampleData[r][ci]);
+    }
+    if (AI && typeof AI.isImplausibleCustomerIdValues === 'function' &&
+        AI.isImplausibleCustomerIdValues(vals)) {
+      return true;
+    }
+    return false;
   }
 
   /* ── File type inference ────────────────────────────────────────────── */
@@ -662,10 +750,10 @@
     var hasStrongBal = false;
     for (var i = 0; i < headers.length; i++) {
       var h = headers[i];
-      if (COLUMN_SIGNALS.customerId && scoreHeaderAlias(h, COLUMN_SIGNALS.customerId) >= 6) hasCid = true;
+      if (FIELD_SIGNALS.customerId && scoreHeaderAlias(h, FIELD_SIGNALS.customerId) >= 6) hasCid = true;
       /* Require strong name header (e.g. fullname, customer name) — weak "name" substring avoids "Branch Name". */
-      if (COLUMN_SIGNALS.customerName && scoreHeaderAlias(h, COLUMN_SIGNALS.customerName) >= 8) hasName = true;
-      if (COLUMN_SIGNALS.balance && scoreHeaderAlias(h, COLUMN_SIGNALS.balance) >= 8) hasStrongBal = true;
+      if (FIELD_SIGNALS.customerName && scoreHeaderAlias(h, FIELD_SIGNALS.customerName) >= 8) hasName = true;
+      if (FIELD_SIGNALS.balance && scoreHeaderAlias(h, FIELD_SIGNALS.balance) >= 8) hasStrongBal = true;
     }
     return hasCid && hasName && !hasStrongBal;
   }
@@ -685,6 +773,12 @@
     if (headers && headers.length && looksLikeCustomerDirectory(headers)) {
       scores.customers = (scores.customers || 0) + 12;
     }
+    /* Prefer mortgage book when filename or headers are clearly residential / first mortgage. */
+    if (combined.indexOf('mortgage') !== -1 || combined.indexOf('heloc') !== -1 ||
+        combined.indexOf('home equity') !== -1 || combined.indexOf('fannie') !== -1 ||
+        combined.indexOf('freddie') !== -1 || combined.indexOf('residential') !== -1) {
+      scores.mortgages = (scores.mortgages || 0) + 10;
+    }
     var best = null;
     var bestScore = 0;
     for (var ft in scores) {
@@ -695,6 +789,12 @@
       if (headers && headers.length && looksLikeCustomerDirectory(headers) &&
           scores.customers === bestScore && best !== 'customers') {
         return 'customers';
+      }
+      /* Prefer mortgages over generic loans when scores tie and mortgage signals present. */
+      if (scores.mortgages === bestScore && best !== 'mortgages' &&
+          (combined.indexOf('mortgage') !== -1 || combined.indexOf('heloc') !== -1 ||
+            combined.indexOf('home equity') !== -1)) {
+        return 'mortgages';
       }
       return best;
     }
@@ -749,21 +849,67 @@
 
   /* ── Row → role-mapped object ─────────────────────────────────────── */
 
-  function rowToObject(row, columnMap, sourceFileName) {
+  /**
+   * Account / note / contract fields only when the header exactly matches a known alias
+   * (normalized). Partial token overlap (e.g. Last_Payment vs "note") must not qualify.
+   */
+  function isStrictAccountIdHeader(header) {
+    var h = norm(header);
+    if (!h) return false;
+    var sigs = FIELD_SIGNALS.accountId;
+    for (var i = 0; i < sigs.length; i++) {
+      if (h === norm(sigs[i])) return true;
+    }
+    return false;
+  }
+
+  function sanitizeFieldMapAccountId(headers, fieldMap) {
+    if (!fieldMap || !headers || !headers.length) return;
+    var a = fieldMap.accountId;
+    if (!a || a.index == null) return;
+    var idx = a.index;
+    if (idx < 0 || idx >= headers.length || !isStrictAccountIdHeader(headers[idx])) {
+      delete fieldMap.accountId;
+    }
+  }
+
+  function fillAccountIdFromHeaders(headers, rawRow, fieldMap, obj) {
+    if (obj.accountId) return;
+    var skip = fieldMap.customerId && fieldMap.customerId.index >= 0 ? fieldMap.customerId.index : -1;
+    var sigs = FIELD_SIGNALS.accountId;
+    if (!sigs || !headers || !headers.length) return;
+    var bestIdx = -1;
+    var bestSc = 0;
+    for (var i = 0; i < headers.length; i++) {
+      if (i === skip) continue;
+      if (!isStrictAccountIdHeader(headers[i])) continue;
+      var sc = scoreHeaderAlias(headers[i], sigs);
+      if (sc >= 10 && sc > bestSc) {
+        bestSc = sc;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx >= 0 && rawRow[bestIdx] !== undefined && String(rawRow[bestIdx]).trim() !== '') {
+      obj.accountId = rawRow[bestIdx];
+    }
+  }
+
+  function rowToObject(row, fieldMap, sourceFileName, headers) {
     var obj = {};
-    for (var role in columnMap) {
-      var idx = columnMap[role].index;
+    for (var role in fieldMap) {
+      var idx = fieldMap[role].index;
       var val = row[idx];
       if (val !== undefined && val !== '') obj[role] = val;
     }
     obj._raw = row;
     if (sourceFileName) obj._sourceFile = sourceFileName;
+    if (headers && headers.length) fillAccountIdFromHeaders(headers, row, fieldMap, obj);
     return obj;
   }
 
-  /* ── Column mapping memory (agents get smarter) ─────────────────────
-   * After each successful load, store the mapping keyed by header
-   * fingerprint. On subsequent loads with the same headers, reuse the
+  /* ── Field mapping memory (agents get smarter) ─────────────────────
+   * After each successful ingestion, store the mapping keyed by header
+   * fingerprint. On subsequent ingestions with the same headers, reuse the
    * stored mapping instantly — no inference needed. Persists across
    * page loads via Copernicus.Store when localStorage is available. */
 
@@ -789,7 +935,7 @@
     learnedMappings[fp] = entry;
     try {
       var LA = global.Copernicus;
-      if (LA && LA.Store && LA.Store.set) LA.Store.set('colmap_' + fp, entry);
+      if (LA && LA.Store && LA.Store.set) LA.Store.set('fieldmap_' + fp, entry);
     } catch (e) { /* persist failed, in-memory still works */ }
   }
 
@@ -800,7 +946,7 @@
     try {
       var LA = global.Copernicus;
       if (LA && LA.Store && LA.Store.get) {
-        var stored = LA.Store.get('colmap_' + fp);
+        var stored = LA.Store.get('fieldmap_' + fp);
         if (stored && validateStoredMapping(stored, headers)) {
           learnedMappings[fp] = stored;
           return stored.mapping;
@@ -810,80 +956,6 @@
     return null;
   }
 
-  function cloneColumnMap(mapping) {
-    var o = {};
-    for (var k in mapping) {
-      if (!mapping[k] || typeof mapping[k] !== 'object') continue;
-      var e = mapping[k];
-      o[k] = { index: e.index, header: e.header, confidence: e.confidence };
-      if (e.source) o[k].source = e.source;
-    }
-    return o;
-  }
-
-  /**
-   * Recalled maps skip re-inference and can keep customerId on a misleading column (e.g. Number_of_Credits).
-   * If the mapped header is misleading, re-pick customerId = best grid score among non-misleading columns
-   * (same signals as infer: customer_id, relationship_id, portfolio aliases, value shape, etc.).
-   */
-  function repairCustomerIdMappingIfNeeded(headers, sampleData, mapping) {
-    if (!mapping || !headers.length || !mapping.customerId) return { mapping: mapping, changed: false };
-    var curIdx = mapping.customerId.index;
-    if (curIdx < 0 || curIdx >= headers.length) return { mapping: mapping, changed: false };
-
-    if (!isMisleadingCustomerIdHeader(headers[curIdx])) return { mapping: mapping, changed: false };
-
-    var grid = buildScoreGrid(headers, sampleData);
-    var bestIdx = -1;
-    var bestScore = -1;
-    for (var ci = 0; ci < headers.length; ci++) {
-      if (isMisleadingCustomerIdHeader(headers[ci])) continue;
-      var s = grid[ci].customerId || 0;
-      if (s > bestScore) {
-        bestScore = s;
-        bestIdx = ci;
-      }
-    }
-    if (bestIdx < 0 || bestIdx === curIdx) return { mapping: mapping, changed: false };
-
-    var newMap = cloneColumnMap(mapping);
-    newMap.customerId = {
-      index: bestIdx,
-      header: headers[bestIdx],
-      confidence: Math.max(6, Math.round(bestScore * 100) / 100),
-      source: 'repaired-misleading-customerId'
-    };
-
-    if (newMap.accountId && newMap.accountId.index === bestIdx) {
-      delete newMap.accountId;
-    }
-
-    if (!newMap.accountId) {
-      var usedCols = {};
-      var usedRoles = {};
-      for (var role in newMap) {
-        if (!newMap[role] || newMap[role].index == null || newMap[role].index < 0) continue;
-        usedCols[newMap[role].index] = true;
-        usedRoles[role] = true;
-      }
-      usedRoles.accountId = false;
-      greedyAssign(grid, ['accountId'], newMap, usedCols, usedRoles, headers);
-    }
-
-    try {
-      if (typeof console !== 'undefined' && console.info) {
-        console.info(
-          '[Copernicus CSVLoader] customerId repaired:',
-          headers[curIdx],
-          '→',
-          headers[bestIdx]
-        );
-      }
-    } catch (logErr) { /* ignore */ }
-
-    return { mapping: newMap, changed: true };
-  }
-
   /* ── In-memory store ──────────────────────────────────────────────── */
 
   var inMemoryStore = null;
@@ -891,8 +963,8 @@
   function freshStore() {
     return {
       files: [],
-      byType: { checking: [], savings: [], cd: [], loans: [], customers: [] },
-      columnMaps: {},
+      byType: { checking: [], savings: [], cd: [], loans: [], mortgages: [], customers: [] },
+      fieldMaps: {},
       customerIndex: null
     };
   }
@@ -920,11 +992,11 @@
     });
   }
 
-  /* ── Main load pipeline ───────────────────────────────────────────── */
+  /* ── Main ingestion pipeline ───────────────────────────────────────── */
 
-  function loadFiles(fileList) {
+  function ingestFiles(fileList) {
     if (!fileList || !fileList.length) {
-      return Promise.resolve({ loaded: [], error: 'No files provided' });
+      return Promise.resolve({ ingested: [], error: 'No files provided' });
     }
 
     var store = getInMemoryStore();
@@ -941,7 +1013,7 @@
                 file: file,
                 type: inferFileType(file.name, []),
                 headers: [],
-                columnMap: {},
+                fieldMap: {},
                 objects: [],
                 delimiter: parsed.delimiter,
                 emptyReason: (!text || !text.trim()) ? 'empty' : 'no-rows'
@@ -952,34 +1024,34 @@
             var fileType = inferFileType(file.name, headers);
             var sampleData = dataRows.slice(0, 20);
 
-            var columnMap;
             var recalled = recallMapping(headers);
-            if (recalled) {
-              columnMap = recalled;
-            } else {
-              columnMap = inferColumnRoles(headers, sampleData);
-              /* No balance column on customer directories — skip AI remap (would fight heuristics). */
-              if (fileType !== 'customers') {
-                columnMap = verifyWithAIEngine(headers, columnMap, sampleData);
-              }
+            if (recalled && shouldDiscardRecalledMapping(headers, recalled, sampleData, fileType)) {
+              recalled = null;
             }
-
-            var cidRepair = repairCustomerIdMappingIfNeeded(headers, sampleData, columnMap);
-            if (cidRepair.changed) columnMap = cidRepair.mapping;
-            if (!recalled || cidRepair.changed) rememberMapping(headers, columnMap);
+            var fieldMap;
+            if (recalled) {
+              fieldMap = recalled;
+            } else {
+              fieldMap = inferFieldRoles(headers, sampleData);
+            }
+            if (fileType !== 'customers') {
+              fieldMap = verifyWithAIEngine(headers, fieldMap, sampleData, fileType);
+            }
+            sanitizeFieldMapAccountId(headers, fieldMap);
+            rememberMapping(headers, fieldMap);
 
             var objects = [];
             for (var r = 0; r < dataRows.length; r++) {
-              objects.push(rowToObject(dataRows[r], columnMap, file.name));
+              objects.push(rowToObject(dataRows[r], fieldMap, file.name, headers));
             }
             return {
               file: file,
               type: fileType,
               headers: headers,
-              columnMap: columnMap,
+              fieldMap: fieldMap,
               objects: objects,
               delimiter: parsed.delimiter,
-              source: recalled && !cidRepair.changed ? 'memory' : (recalled ? 'memory+corrected' : 'inferred')
+              source: recalled ? 'memory' : 'inferred'
             };
           })
         );
@@ -1002,7 +1074,7 @@
         store.files = store.files.filter(function (f) {
           return f.name !== fname;
         });
-        delete store.columnMaps[fname];
+        delete store.fieldMaps[fname];
       }
 
       results.forEach(function (r) {
@@ -1013,24 +1085,24 @@
           type: r.type,
           rowCount: r.objects ? r.objects.length : 0,
           headers: r.headers,
-          columnMap: r.columnMap,
+          fieldMap: r.fieldMap,
           delimiter: r.delimiter,
           emptyReason: r.emptyReason
         });
         if (r.type && store.byType[r.type]) {
           store.byType[r.type] = store.byType[r.type].concat(r.objects || []);
         }
-        store.columnMaps[fname] = r.columnMap;
+        store.fieldMaps[fname] = r.fieldMap;
       });
 
       if (global.Copernicus && global.Copernicus.Data) {
-        global.Copernicus.Data._normalizeFromLoader();
+        global.Copernicus.Data._normalizeFromIngestion();
       }
 
       return {
-        loaded: store.files,
+        ingested: store.files,
         byType: store.byType,
-        columnMaps: store.columnMaps,
+        fieldMaps: store.fieldMaps,
         inMemory: true
       };
     });
@@ -1039,16 +1111,16 @@
   /* ── Public API ───────────────────────────────────────────────────── */
 
   var CSVLoader = {
-    loadFiles: loadFiles,
+    ingestFiles: ingestFiles,
     getInMemoryStore: getInMemoryStore,
     clearInMemoryStore: clearInMemoryStore,
     parseCSV: parseCSV,
     detectDelimiter: detectDelimiter,
     inferFileType: inferFileType,
-    inferColumnRoles: inferColumnRoles,
+    inferFieldRoles: inferFieldRoles,
     verifyWithAIEngine: verifyWithAIEngine,
     buildScoreGrid: buildScoreGrid,
-    analyzeColumnValues: analyzeColumnValues,
+    analyzeFieldValues: analyzeFieldValues,
     scoreValuePattern: scoreValuePattern,
     scoreHeaderSemantic: scoreHeaderSemantic,
     scoreHeaderAlias: scoreHeaderAlias,
@@ -1058,13 +1130,15 @@
     inferNumeric: inferNumeric,
     inferDate: inferDate,
     detectBoolean: detectBoolean,
+    isStrictAccountIdHeader: isStrictAccountIdHeader,
+    isPlausibleLoanTermMonthCount: isPlausibleLoanTermMonthCount,
     getNormalizedCustomerId: function (val) { return val == null ? '' : String(val).trim(); },
     getBalance: function (obj) { var n = inferNumeric(obj && obj.balance); return n != null ? n : 0; },
     isPrimary: function (obj) { return detectBoolean(obj && obj.primary); },
     hasDirectDeposit: function (obj) { return detectBoolean(obj && obj.directDeposit); },
     getIncome: function (obj) { return inferNumeric(obj && obj.income); },
     FILE_TYPES: FILE_TYPES,
-    COLUMN_ROLES: COLUMN_ROLES,
+    FIELD_ROLES: FIELD_ROLES,
     SEMANTIC_CONCEPTS: SEMANTIC_CONCEPTS,
     AI_CONFIDENCE_THRESHOLD: AI_CONFIDENCE_THRESHOLD
   };
