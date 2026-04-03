@@ -366,6 +366,11 @@
           var disp = crow.customerName != null ? String(crow.customerName).trim() : '';
           if (!disp) continue;
           if (!nameMap[cidKey]) nameMap[cidKey] = disp;
+          var cidNum = Number(cidKey.replace(/,/g, ''));
+          if (!isNaN(cidNum) && isFinite(cidNum) && Math.abs(cidNum) < 1e15) {
+            var cidCanon = String(Math.round(cidNum));
+            if (cidCanon !== cidKey && nameMap[cidCanon] == null) nameMap[cidCanon] = disp;
+          }
         }
         this.state.customerDirectory = nameMap;
 

@@ -166,7 +166,7 @@
       if (out.ok) {
         var r = out.result;
         if (r && r.needsData) {
-          showDataModal(r.missingTypes || []);
+          showDataModal(r.missingTypes || [], agent);
           pendingRunAfterIngest = true;
           if (resultText) resultText.textContent = '';
           if (resultPanel) resultPanel.style.display = 'none';
@@ -302,10 +302,19 @@
     children.className = 'jt-children';
     for (var i = 0; i < arr.length; i++) {
       var itemLabel = '[' + i + ']';
-      if (arr[i] && typeof arr[i] === 'object' && arr[i].customerId) {
-        itemLabel += arr[i].reference
-          ? ' ' + arr[i].reference
-          : ' customer ' + arr[i].customerId;
+      var row = arr[i];
+      if (row && typeof row === 'object' && row.customerId != null) {
+        var cn = row.customerName != null ? String(row.customerName).trim() : '';
+        if (cn) {
+          itemLabel += ' ' + cn;
+          if (row.reference != null && String(row.reference).trim() !== '') {
+            itemLabel += ' · ' + String(row.reference).trim();
+          }
+        } else if (row.reference != null && String(row.reference).trim() !== '') {
+          itemLabel += ' ' + String(row.reference).trim();
+        } else {
+          itemLabel += ' customer ' + row.customerId;
+        }
       }
       children.appendChild(buildJsonTree(arr[i], itemLabel, false));
     }
@@ -501,12 +510,24 @@
 
   /* ── Data modal ───────────────────────────────────────────────────── */
 
-  function showDataModal(missingTypes) {
+  var OPTIONAL_SOURCE_HINTS = {
+    mortgages: 'Adds mortgage rows to spread results when present.',
+    customers: 'Joins names from your directory when relationship ids match loan rows (or any matching cell).',
+    savings: 'Optional for some workflows.',
+    cd: 'Optional for some workflows.',
+    checking: 'Optional for some workflows.'
+  };
+
+  function showDataModal(missingTypes, agent) {
     var modal = el('data-modal');
     var typesList = el('modal-types');
+    var optBlock = el('modal-optional-block');
+    var optList = el('modal-optional-types');
     if (!modal || !typesList) return;
 
     typesList.innerHTML = '';
+    if (optList) optList.innerHTML = '';
+    if (optBlock) optBlock.style.display = 'none';
     var msgEl = el('modal-message');
 
     if (missingTypes.length === 1 && missingTypes[0] === '__any_csv__') {
@@ -539,8 +560,30 @@
 
     if (msgEl) {
       msgEl.textContent = missingTypes.length === 1
-        ? 'The agent needs ' + missingTypes[0] + ' account data. Select a CSV file below — data stays in memory only.'
+        ? 'The agent needs ' + sourceDataTypeLabel(missingTypes[0]) + ' data. Select a CSV file below — data stays in memory only.'
         : 'The agent needs banking data that hasn\'t been ingested yet. Select CSV files below — data stays in memory only.';
+    }
+
+    var optionalTypes = agent && agent.optionalDataTypes && agent.optionalDataTypes.length
+      ? agent.optionalDataTypes
+      : [];
+    if (optBlock && optList && optionalTypes.length) {
+      optBlock.style.display = 'block';
+      for (var oi = 0; oi < optionalTypes.length; oi++) {
+        var ot = optionalTypes[oi];
+        if (missingTypes.indexOf(ot) !== -1) continue;
+        var oli = document.createElement('li');
+        var lab = sourceDataTypeLabel(ot);
+        var hint = OPTIONAL_SOURCE_HINTS[ot] || 'You may add this file to enrich results.';
+        oli.innerHTML = '<strong>' + escapeHtml(lab) + '</strong> <span class="modal-optional-tag">optional</span> — ' +
+          escapeHtml(hint);
+        if (ingestedTypes[ot]) {
+          oli.className = 'loaded';
+          oli.innerHTML += ' <span class="modal-ingested">(ingested)</span>';
+        }
+        optList.appendChild(oli);
+      }
+      if (!optList.children.length) optBlock.style.display = 'none';
     }
 
     modal.classList.add('open');
