@@ -16,6 +16,16 @@
     'directDeposit', 'primary', 'income', 'customerName'
   ];
 
+  /**
+   * Party-level roles for file type `customers` (customer directory / demographic extracts).
+   * In banking vocabulary these are **party** attributes (person or organization identity and
+   * contact/demographics), not product-account columns like balance or loan term.
+   * UI copy: "Customer information" or "party / directory fields" — avoid overloading account roles.
+   */
+  var PARTY_FIELD_ROLES = [
+    'customerId', 'customerName', 'postalCode', 'birthYear', 'genderCode'
+  ];
+
   var FILE_TYPE_SIGNALS = {
     checking: [
       'checking', 'check', 'demand', 'dda', 'current account',
@@ -121,6 +131,18 @@
       'legal_name', 'legal name', 'preferred_name', 'member_name', 'member name',
       'account_holder_name', 'holder_name', 'client_name', 'party_name',
       'primary_name', 'customer full name'
+    ],
+    postalCode: [
+      'zip', 'zipcode', 'zip code', 'zip_code', 'postal', 'postal code', 'postal_code',
+      'postcode', 'post_cd', 'mailing zip', 'mailing_zip', 'addr zip', 'address zip'
+    ],
+    birthYear: [
+      'birthyear', 'birth_year', 'birth year', 'year of birth', 'yob', 'birthyr',
+      'dob year', 'dob_yr', 'year_born', 'born year'
+    ],
+    genderCode: [
+      'gender', 'sex', 'gender_cd', 'gender code', 'gender_code', 'sex_cd',
+      'member gender', 'demographic gender'
     ]
   };
 
@@ -290,7 +312,10 @@
     ],
     customerName: [
       'name', 'full', 'display', 'legal', 'preferred', 'given', 'surname'
-    ]
+    ],
+    postalCode: ['zip', 'postal', 'mailing', 'postcode'],
+    birthYear: ['birth', 'born', 'yob'],
+    genderCode: ['gender', 'sex']
   };
 
   function scoreHeaderSemantic(header) {
@@ -373,6 +398,8 @@
     var maxAbsInteger = 0;
     var shortLenCount = 0;
     var plausibleTermMonthCount = 0;
+    var zipLikeCount = 0;
+    var birthYearLikeCount = 0;
 
     for (var j = 0; j < vals.length; j++) {
       var raw = vals[j];
@@ -386,6 +413,9 @@
       var num = parseFloat(cleaned);
       var isNum = !isNaN(num) && /^[\-\+]?[\d,.\s$€£¥()]+$/.test(raw);
 
+      var rawNormZip = String(raw).trim().replace(/\s+/g, '');
+      var looksZip = /^\d{5}(?:-\d{4})?$/.test(rawNormZip);
+
       if (isNum) {
         numericCount++;
         if (raw.indexOf('.') !== -1) floatWithDecimal++;
@@ -393,6 +423,9 @@
           integerCount++;
           var ai = Math.abs(Math.floor(num));
           if (ai > maxAbsInteger) maxAbsInteger = ai;
+          if (!looksZip && rawNormZip.indexOf('.') === -1 && ai >= 10000 && ai <= 99999) looksZip = true;
+          var rawDigits = String(raw).replace(/[^\d]/g, '');
+          if (rawDigits.length <= 4 && ai >= 1900 && ai <= new Date().getFullYear()) birthYearLikeCount++;
         }
         if (num === Math.floor(num) && Math.abs(num) < 200) smallInt++;
         if (num >= 1 && num === Math.floor(num) && isPlausibleLoanTermMonthCount(Math.floor(num))) {
@@ -401,6 +434,8 @@
         if (Math.abs(num) <= 1) smallFloat++;
         else if (Math.abs(num) <= 100 && raw.indexOf('.') !== -1) smallFloat++;
       }
+
+      if (looksZip) zipLikeCount++;
 
       for (var k = 0; k < DATE_PATTERNS.length; k++) {
         if (DATE_PATTERNS[k].test(raw)) { dateCount++; break; }
@@ -463,7 +498,9 @@
       avgLen: sumLen / total,
       maxAbsInteger: maxAbsInteger,
       shortLenRatio: shortLenCount / total,
-      plausibleTermMonthCount: plausibleTermMonthCount
+      plausibleTermMonthCount: plausibleTermMonthCount,
+      zipLikeRatio: zipLikeCount / total,
+      birthYearLikeRatio: birthYearLikeCount / total
     };
   }
 
@@ -575,6 +612,84 @@
     return scores;
   }
 
+  /**
+   * Value-layer scores for party-level (customer directory) columns only.
+   * Down-weights customerId for ZIP-shaped and birth-year-shaped columns so they map to postalCode / birthYear.
+   */
+  function scorePartyValuePattern(stats) {
+    var scores = {
+      customerId: 0,
+      customerName: 0,
+      postalCode: 0,
+      birthYear: 0,
+      genderCode: 0
+    };
+    var t = stats.total || 1;
+    if (!stats.total || stats.type === 'empty') return scores;
+
+    var zipR = stats.zipLikeRatio != null ? stats.zipLikeRatio : 0;
+    var byR = stats.birthYearLikeRatio != null ? stats.birthYearLikeRatio : 0;
+    var avgLen = stats.avgLen != null ? stats.avgLen : 0;
+    var maxLen = stats.maxLen != null ? stats.maxLen : 0;
+    var maxAbsInt = stats.maxAbsInteger != null ? stats.maxAbsInteger : 0;
+    var shortLenRatio = stats.shortLenRatio != null ? stats.shortLenRatio : 0;
+
+    scores.customerId = 0;
+    if (stats.cardinalityRatio >= 0.05 && stats.cardinalityRatio <= 0.95) scores.customerId += 3;
+    if (stats.formatConsistency >= 0.5) scores.customerId += 2;
+    if (stats.lenRange <= 3 && (maxLen >= 4 || avgLen >= 3.5)) scores.customerId += 2;
+    if (stats.integerCount === t && stats.floatWithDecimal === 0) scores.customerId += 2;
+    if (stats.allAlphaNum && stats.floatWithDecimal === 0) scores.customerId += 1;
+    if (!stats.isMonotonic) scores.customerId += 1;
+    if (stats.numericCount >= t * 0.85 && stats.floatWithDecimal >= t * 0.35) scores.customerId -= 12;
+    if (stats.hasCurrency > 0) scores.customerId -= 5;
+    if (stats.dateCount > t * 0.5) scores.customerId -= 5;
+    var allIntegers = stats.integerCount === t && stats.floatWithDecimal === 0;
+    if (allIntegers && maxLen <= 4 && avgLen <= 3.25 && maxAbsInt <= 999) {
+      scores.customerId -= 5;
+    } else if (allIntegers && shortLenRatio >= 0.7 && maxAbsInt <= 999 && avgLen <= 4) {
+      scores.customerId -= 3;
+    }
+    if (allIntegers && stats.dateCount < t * 0.3 && stats.hasCurrency === 0) {
+      if (avgLen >= 4.5 || maxLen >= 6) scores.customerId += 2;
+      else if (maxLen >= 5) scores.customerId += 1;
+    }
+    if (!allIntegers && stats.floatWithDecimal === 0 && stats.allAlphaNum && (avgLen >= 5 || maxLen >= 6)) {
+      scores.customerId += 2;
+    }
+    if (stats.shortLenRatio >= 0.85 && stats.uniqueCount <= 15 && stats.avgLen <= 2.5) {
+      scores.customerId -= 10;
+    }
+    if (zipR >= 0.5) scores.customerId -= 8;
+    if (zipR >= 0.75) scores.customerId -= 8;
+    if (byR >= 0.5) scores.customerId -= 7;
+    if (byR >= 0.75) scores.customerId -= 6;
+
+    if (zipR >= 0.75) scores.postalCode += 8;
+    else if (zipR >= 0.5) scores.postalCode += 5;
+    else if (zipR >= 0.35) scores.postalCode += 2;
+
+    if (byR >= 0.75) scores.birthYear += 8;
+    else if (byR >= 0.5) scores.birthYear += 4;
+    else if (byR >= 0.35) scores.birthYear += 2;
+
+    scores.genderCode = 0;
+    if (stats.uniqueCount <= 12 && stats.uniqueCount >= 2 && stats.cardinalityRatio <= 0.25 && stats.numericCount < t * 0.55) {
+      scores.genderCode += 4;
+    }
+    if (stats.shortLenRatio >= 0.65 && stats.avgLen <= 10 && stats.uniqueCount <= 8) {
+      scores.genderCode += 2;
+    }
+
+    scores.customerName = 0;
+    if (stats.numericCount < t * 0.5 && stats.uniqueCount > 1) scores.customerName += 3;
+    if (stats.avgLen >= 5) scores.customerName += 2;
+    if (stats.dateCount > t * 0.3) scores.customerName -= 4;
+    if (stats.hasCurrency > 0) scores.customerName -= 4;
+
+    return scores;
+  }
+
   /* ── Multi-signal fusion engine ─────────────────────────────────────
    * Two-phase assignment: non-ID roles first (balance, rate, term, etc.),
    * then customerId from remaining fields. accountId is never inferred
@@ -631,7 +746,8 @@
     return n % 3 === 0;
   }
 
-  function buildScoreGrid(headers, sampleRows) {
+  function buildScoreGrid(headers, sampleRows, fileType) {
+    var isParty = fileType === 'customers';
     var colCount = headers.length;
     var colStats = [];
     for (var c = 0; c < colCount; c++) {
@@ -641,18 +757,30 @@
     for (var ci = 0; ci < colCount; ci++) {
       var row = {};
       var semanticScores = scoreHeaderSemantic(headers[ci]);
-      var valueScores = scoreValuePattern(colStats[ci]);
-      FIELD_ROLES.forEach(function (role) {
-        var aliasS = FIELD_SIGNALS[role] ? scoreHeaderAlias(headers[ci], FIELD_SIGNALS[role]) : 0;
-        var semanticS = semanticScores[role] || 0;
-        var valueS = valueScores[role] || 0;
-        row[role] = (aliasS * WEIGHT_ALIAS) + (semanticS * WEIGHT_SEMANTIC) + (valueS * WEIGHT_VALUE);
-      });
-      var cidAdj = customerIdHeaderScoreAdjust(headers[ci]);
-      if (cidAdj) row.customerId = Math.max(0, row.customerId + cidAdj);
-      var termAlias = scoreHeaderAlias(headers[ci], FIELD_SIGNALS.term);
-      if (termAlias >= 6) row.term += 2.25;
-      if (termAlias >= 10) row.term += 1.25;
+      if (isParty) {
+        var partyVals = scorePartyValuePattern(colStats[ci]);
+        PARTY_FIELD_ROLES.forEach(function (role) {
+          var aliasS = FIELD_SIGNALS[role] ? scoreHeaderAlias(headers[ci], FIELD_SIGNALS[role]) : 0;
+          var semanticS = semanticScores[role] || 0;
+          var valueS = partyVals[role] || 0;
+          row[role] = (aliasS * WEIGHT_ALIAS) + (semanticS * WEIGHT_SEMANTIC) + (valueS * WEIGHT_VALUE);
+        });
+        var cidAdjP = customerIdHeaderScoreAdjust(headers[ci]);
+        if (cidAdjP) row.customerId = Math.max(0, row.customerId + cidAdjP);
+      } else {
+        var valueScores = scoreValuePattern(colStats[ci]);
+        FIELD_ROLES.forEach(function (role) {
+          var aliasS = FIELD_SIGNALS[role] ? scoreHeaderAlias(headers[ci], FIELD_SIGNALS[role]) : 0;
+          var semanticS = semanticScores[role] || 0;
+          var valueS = valueScores[role] || 0;
+          row[role] = (aliasS * WEIGHT_ALIAS) + (semanticS * WEIGHT_SEMANTIC) + (valueS * WEIGHT_VALUE);
+        });
+        var cidAdj = customerIdHeaderScoreAdjust(headers[ci]);
+        if (cidAdj) row.customerId = Math.max(0, row.customerId + cidAdj);
+        var termAlias = scoreHeaderAlias(headers[ci], FIELD_SIGNALS.term);
+        if (termAlias >= 6) row.term += 2.25;
+        if (termAlias >= 10) row.term += 1.25;
+      }
       grid.push(row);
     }
     return grid;
@@ -681,7 +809,52 @@
     }
   }
 
-  function inferFieldRoles(headers, sampleRows) {
+  function inferPartyFieldRoles(headers, sampleRows) {
+    var grid = buildScoreGrid(headers, sampleRows, 'customers');
+    var mapping = {};
+    var usedCols = {};
+    var usedRoles = {};
+    greedyAssign(grid, PARTY_FIELD_ROLES, mapping, usedCols, usedRoles, headers);
+
+    if (!mapping.customerId && headers.length) {
+      var bestFb = -1;
+      var bestFbScore = -1;
+      for (var ai = 0; ai < headers.length; ai++) {
+        if (usedCols[ai]) continue;
+        var sc = grid[ai].customerId || 0;
+        if (sc > bestFbScore) { bestFbScore = sc; bestFb = ai; }
+      }
+      if (bestFb >= 0) {
+        mapping.customerId = { index: bestFb, header: headers[bestFb], confidence: Math.round(bestFbScore * 100) / 100 };
+        usedCols[bestFb] = true;
+      } else {
+        var bestHdr = -1;
+        var bestHdrAlias = -1;
+        for (var hi = 0; hi < headers.length; hi++) {
+          if (usedCols[hi]) continue;
+          var al = FIELD_SIGNALS.customerId ? scoreHeaderAlias(headers[hi], FIELD_SIGNALS.customerId) : 0;
+          if (al > bestHdrAlias) { bestHdrAlias = al; bestHdr = hi; }
+        }
+        if (bestHdr >= 0) {
+          mapping.customerId = {
+            index: bestHdr,
+            header: headers[bestHdr],
+            confidence: bestHdrAlias >= 8 ? 6.5 : 4
+          };
+        } else {
+          mapping.customerId = { index: 0, header: headers[0], confidence: 0.5 };
+        }
+      }
+    }
+
+    return mapping;
+  }
+
+  function inferFieldRoles(headers, sampleRows, fileType) {
+    if (fileType === 'customers') {
+      return inferPartyFieldRoles(headers, sampleRows);
+    }
+
     var grid = buildScoreGrid(headers, sampleRows);
     var mapping = {};
     var usedCols = {};
@@ -723,6 +896,9 @@
 
   function shouldDiscardRecalledMapping(headers, mapping, sampleData, fileType) {
     if (!mapping || !mapping.customerId) return true;
+    if (fileType === 'customers' && (mapping.balance != null || mapping.term != null)) {
+      return true;
+    }
     var ci = mapping.customerId.index;
     if (ci < 0 || ci >= headers.length) return true;
     var AI = global.Copernicus && global.Copernicus.AI;
@@ -1032,7 +1208,7 @@
             if (recalled) {
               fieldMap = recalled;
             } else {
-              fieldMap = inferFieldRoles(headers, sampleData);
+              fieldMap = inferFieldRoles(headers, sampleData, fileType);
             }
             if (fileType !== 'customers') {
               fieldMap = verifyWithAIEngine(headers, fieldMap, sampleData, fileType);
@@ -1120,6 +1296,7 @@
     inferFieldRoles: inferFieldRoles,
     verifyWithAIEngine: verifyWithAIEngine,
     buildScoreGrid: buildScoreGrid,
+    PARTY_FIELD_ROLES: PARTY_FIELD_ROLES,
     analyzeFieldValues: analyzeFieldValues,
     scoreValuePattern: scoreValuePattern,
     scoreHeaderSemantic: scoreHeaderSemantic,
@@ -1132,7 +1309,14 @@
     detectBoolean: detectBoolean,
     isStrictAccountIdHeader: isStrictAccountIdHeader,
     isPlausibleLoanTermMonthCount: isPlausibleLoanTermMonthCount,
-    getNormalizedCustomerId: function (val) { return val == null ? '' : String(val).trim(); },
+    getNormalizedCustomerId: function (val) {
+      if (val == null) return '';
+      var s = String(val).trim().replace(/,/g, '');
+      if (!s) return '';
+      /* Spreadsheet-style floats on id columns (e.g. 200005720.0) */
+      if (/^-?\d+\.0+$/.test(s)) return s.replace(/\.0+$/, '');
+      return s;
+    },
     getBalance: function (obj) { var n = inferNumeric(obj && obj.balance); return n != null ? n : 0; },
     isPrimary: function (obj) { return detectBoolean(obj && obj.primary); },
     hasDirectDeposit: function (obj) { return detectBoolean(obj && obj.directDeposit); },

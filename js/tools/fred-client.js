@@ -17,12 +17,21 @@
 
   var KNOT_PREVIEW_MONTHS = [1, 12, 24, 60, 120, 240, 360];
 
-  /** BankersIQ returns decimals like 0.0373 (= 3.73% annual); loan CSV uses percent e.g. 6.25. */
-  function rawRateToAnnualPercent(v) {
+  /**
+   * Single convention for annual rates used in spread math and display:
+   * **percent points** (7 = 7%, 4.81 = 4.81%), not decimal fraction of 1.
+   * BankersIQ trates: 0.0481 → 4.81. Loan CSV may use 6.25, 7, or 0.07 meaning 7% — values in [0, 0.5)
+   * are treated as decimal fractions and scaled ×100 so they match Treasury.
+   */
+  function annualRateToPercentPoints(v) {
     var n = Number(v);
     if (!isFinite(n)) return NaN;
     if (n >= 0 && n < 0.5) return n * 100;
     return n;
+  }
+
+  function rawRateToAnnualPercent(v) {
+    return annualRateToPercentPoints(v);
   }
 
   function bankersIqTratesUrl() {
@@ -105,4 +114,5 @@
   LA.tools.buildMonthlyTreasuryCurve = buildMonthlyTreasuryCurve;
   LA.tools.fetchBankersIqTreasuryCurve = fetchBankersIqCurve;
   LA.tools.treasuryYieldForTermMonths = treasuryYieldForTermMonths;
+  LA.tools.annualRateToPercentPoints = annualRateToPercentPoints;
 })(typeof window !== 'undefined' ? window : this);
