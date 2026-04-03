@@ -151,6 +151,8 @@
       'is the relationship / customer key — map it to customerId. Risk_Rating, credit grade, PD, LGD, ' +
       'FICO, and two-character letter buckets are never customer identifiers. ' +
       'Loan number, note number, contract id belong on the loan reference field, not customerId. ' +
+      'Customer information / party-directory extracts (file type customers) use party roles: customerId, customerName, ' +
+      'postalCode (ZIP+4), birthYear, genderCode — not balance or loan term. ' +
       'Statement_Rate = interest rate; Previous_Average_Balance = balance; PMTD_* = period-to-date. ' +
       'Field signal test: Ask about **inferred vs ai-engine**, **anomalies**, or **severity** — the agent ships `fieldSignalLexicon` and the engine answers from that glossary.',
     sources: ['Banking data conventions']
@@ -260,7 +262,8 @@
     },
     context: 'Matches each loan term (months) to a monthly Treasury curve from BankersIQ (HTTPS /api/luci/trates/ with api_key via Copernicus.KeyRing). ' +
       'Service outages, relay or proxy misconfiguration, and stale API data create interest-rate and spread risk in reported margins. ' +
-      'Spread = note rate minus matched Treasury (annual %). Gross monthly spread = balance × spread / 12. ' +
+      'Note rate and Treasury are both normalized to **percent points** (7 = 7%, 4.81 = 4.81%): CSV values in [0, 0.5) are treated as decimal fractions (0.07 → 7) to match API decimals (0.0481 → 4.81). ' +
+      'Spread = note rate minus matched Treasury (same units). Gross monthly spread = balance × (spread/100) / 12. ' +
       'Net subtracts servicing as balance × (annualServicingBps/10000) / 12. Not ALM, FTP, hedge, or OAS.',
     sources: [
       'BankersIQ — Treasury rates by term (trates)',
