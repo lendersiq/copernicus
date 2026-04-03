@@ -151,6 +151,10 @@
       background: var(--bg); font-size: .9rem; color: var(--text);
     }
     .modal .missing-list li.loaded { color: var(--success); }
+    .modal-optional-block { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+    .modal-optional-block .modal-sub { font-size: .85rem; font-weight: 600; margin: 0 0 .5rem 0; color: var(--text); }
+    .modal-optional-tag { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    .modal-ingested { color: var(--success); font-size: .85rem; }
     .modal-actions { display: flex; gap: .75rem; }
     /* ── AI Insights panel ─────────────────────────────────── */
     .ai-header { display: flex; align-items: center; gap: .5rem; margin-bottom: .75rem; }
@@ -246,6 +250,10 @@
       <h3>Data required</h3>
       <p id="modal-message">The agent needs banking data that hasn’t been ingested yet. Select CSV files below — data stays in memory only.</p>
       <ul id="modal-types" class="missing-list"></ul>
+      <div id="modal-optional-block" class="modal-optional-block" style="display: none;">
+        <p class="modal-sub">Optional sources (this agent)</p>
+        <ul id="modal-optional-types" class="missing-list"></ul>
+      </div>
       <div class="modal-actions">
         <button type="button" id="modal-select-btn" class="btn btn-primary">Select files…</button>
         <button type="button" id="modal-cancel-btn" class="btn">Cancel</button>
