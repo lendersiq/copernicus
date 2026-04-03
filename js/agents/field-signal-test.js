@@ -14,7 +14,7 @@
    */
   var FIELD_SIGNAL_LEXICON =
     '## Field signal test — reading the report\n\n' +
-    '**Mappings** — Each line is one CSV field index linked to a banking role (e.g. customerId, balance, typeCode). ' +
+    '**Mappings** — Each line is one CSV field index linked to a role: **account/product** files use roles like customerId, balance, typeCode; **Customer information** (party / directory) files use party roles like customerId, customerName, postalCode, birthYear, genderCode. ' +
     'Open the result JSON `mappings` array for the full list per file.\n\n' +
     '**source: inferred vs ai-engine** — ' +
     '**inferred** means the CSV ingestion path assigned the role using header aliases, semantic tokens, and value-shape scores (greedy grid). ' +
@@ -106,14 +106,16 @@
 
     if (loader && typeof loader.buildScoreGrid === 'function' && sampleData.length) {
       try {
-        var grid = loader.buildScoreGrid(f.headers, sampleData);
+        var grid = loader.buildScoreGrid(f.headers, sampleData, f.type);
         for (var role in fieldMap) {
           if (!fieldMap[role] || fieldMap[role].index == null) continue;
           var ci = fieldMap[role].index;
           var assigned = grid[ci] && grid[ci][role] != null ? grid[ci][role] : 0;
           var bestRole = role;
           var best = assigned;
-          var roles = loader.FIELD_ROLES || [];
+          var roles = (f.type === 'customers' && loader.PARTY_FIELD_ROLES && loader.PARTY_FIELD_ROLES.length)
+            ? loader.PARTY_FIELD_ROLES
+            : (loader.FIELD_ROLES || []);
           for (var rj = 0; rj < roles.length; rj++) {
             var rr = roles[rj];
             var sc = grid[ci] && grid[ci][rr] != null ? grid[ci][rr] : 0;
