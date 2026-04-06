@@ -1665,8 +1665,14 @@
     return [];
   }
 
-  function marketVitalitySynthesis(latestDep, fsbi, hasFsbiLines) {
-    if (!latestDep || !hasFsbiLines || !fsbi) return null;
+  /**
+   * Closing line: lead with ~MV_WINDOW_YEARS deposit + FSBI window; YoY as near-term momentum (may diverge).
+   */
+  function marketVitalitySynthesis(result) {
+    if (!result) return null;
+    var trend = result.depositTrend;
+    var fsbi = result.fsbi;
+    if (!Array.isArray(trend) || trend.length < 2 || !fsbi || fsbi.skipped) return null;
     var tool = LA.tools && LA.tools.fsbi;
     var series = (fsbi.series && fsbi.series.length)
       ? fsbi.series
@@ -1674,20 +1680,87 @@
         ? tool.sortAndFilterStatewideSeries(fsbi.data || [])
         : []);
     if (!series.length) return null;
-    var newest = series[series.length - 1];
-    var depYoy = latestDep.yoyPct;
-    var fsbiYoy = newest.salesYoyPctSa != null ? newest.salesYoyPctSa : newest.salesYoyPctNsa;
-    var depTone = depYoy == null ? 'unclear' : (depYoy >= 0 ? 'positive' : 'negative');
-    var fsbiTone = fsbiYoy == null ? 'unclear' : (fsbiYoy >= 0 ? 'positive' : 'negative');
-    var sync = depTone === fsbiTone && depTone !== 'unclear';
-    var body = 'Read together, recent branch-reported deposits (a liquidity / local banking footprint signal) are ' +
-      depTone + ' year-on-year, while statewide small-business sales momentum in FSBI is ' + fsbiTone + ' in the latest month. ';
-    if (sync && depTone !== 'unclear') {
-      body += 'When both move in the same direction, it can support a coherent short-term read on market vitality; mixed signals warrant a narrower geography or more local data.';
-    } else {
-      body += 'Mixed signals between deposit aggregates and card-based small-business activity are common—use both as directional context, not a full census of the trade area.';
+
+    var latest = trend[trend.length - 1];
+    var yEndCal = latest.year;
+    var yStartCal = yEndCal - (MV_WINDOW_YEARS - 1);
+    var trendWin = [];
+    for (var wi = 0; wi < trend.length; wi++) {
+      var yyr = trend[wi].year;
+      if (yyr >= yStartCal && yyr <= yEndCal) trendWin.push(trend[wi]);
     }
-    return body;
+    if (trendWin.length < 2) return null;
+    var firstW = trendWin[0];
+    var latestW = trendWin[trendWin.length - 1];
+    var depWindowPct = firstW.depositsThousands > 0
+      ? ((latestW.depositsThousands - firstW.depositsThousands) / firstW.depositsThousands) * 100
+      : null;
+
+    var winM = fsbiSliceLastMonths(series, MV_WINDOW_MONTHS);
+    var oldestM = winM.length ? winM[0] : series[0];
+    var newestM = winM.length ? winM[winM.length - 1] : series[series.length - 1];
+    var pctS = fsbiIndexPctChange(oldestM.salesIndexSa, newestM.salesIndexSa);
+
+    var depYoy = latest.yoyPct;
+    var fsbiYoy = newestM.salesYoyPctSa != null ? newestM.salesYoyPctSa : newestM.salesYoyPctNsa;
+
+    var midDep = depWindowPct == null ? 'n/a' : (Math.round(depWindowPct * 10) / 10 + '%');
+    if (depWindowPct != null && depWindowPct > 0) midDep = '+' + midDep;
+    var midFsbi = pctS == null ? 'n/a' : (Math.round(pctS * 100) / 100 + '%');
+    if (pctS != null && pctS > 0) midFsbi = '+' + midFsbi;
+
+    var nearDep = depYoy == null ? 'n/a' : (Math.round(depYoy * 100) / 100 + '% YoY');
+    if (depYoy != null) nearDep = (depYoy >= 0 ? '+' : '') + nearDep;
+    var nearFsbi = fsbiYoy == null ? 'n/a' : (Math.round(fsbiYoy * 100) / 100 + '% YoY');
+    if (fsbiYoy != null) nearFsbi = (fsbiYoy >= 0 ? '+' : '') + nearFsbi;
+
+    var agreeMid = depWindowPct != null && pctS != null &&
+      (depWindowPct >= 0) === (pctS >= 0) && Math.abs(depWindowPct) > 0.5 && Math.abs(pctS) > 0.5;
+    var agreeNear = depYoy != null && fsbiYoy != null && (depYoy >= 0) === (fsbiYoy >= 0);
+    var depCross = depWindowPct != null && depYoy != null && (depWindowPct >= 0) !== (depYoy >= 0);
+    var fsbiCross = pctS != null && fsbiYoy != null && (pctS >= 0) !== (fsbiYoy >= 0);
+
+    var tail = '';
+    if (depCross) {
+      tail += ' Deposits: multi-year change and latest YoY differ in sign—YoY is the short pulse on top of the wider June-30 arc. ';
+    }
+    if (fsbiCross) {
+      tail += ' FSBI: cumulative index move over the monthly window and latest sales YoY differ in sign—same interpretation. ';
+    }
+    if (!depCross && !fsbiCross) {
+      if (agreeMid && agreeNear) {
+        tail += ' Multi-year and YoY signs line up across deposits and FSBI sales. ';
+      } else if (agreeMid) {
+        tail += ' Multi-year deposit and FSBI index moves agree in direction; latest YoY differs between the two series. ';
+      } else if (agreeNear) {
+        tail += ' Latest YoY agrees across series; multi-year deposit vs FSBI index changes are mixed. ';
+      } else {
+        tail += ' Read multi-year window first, then YoY for the most recent beat. ';
+      }
+    }
+
+    var scope = ' Directional only—not a full census of the trade area.';
+    var conclusion;
+    if (depCross && fsbiCross) {
+      conclusion = ' Conclusion: On this census (branch deposits for the geography and statewide FSBI sales), vitality reads strong over the ~' + MV_WINDOW_YEARS + '-year window with near-term softness in both lines—lead with the window; YoY marks the latest pulse.';
+    } else if (depCross) {
+      conclusion = ' Conclusion: Deposits built over the window but the latest June-30 year is weaker YoY; FSBI does not show the same window-versus-YoY split—vitality is mixed, with local deposit timing flagging nearer-term pressure.';
+    } else if (fsbiCross) {
+      conclusion = ' Conclusion: FSBI gained over the window but latest sales YoY is soft; deposits do not show that same split—statewide small-business momentum cools in the latest beat relative to the multi-year arc.';
+    } else if (agreeMid && agreeNear) {
+      conclusion = ' Conclusion: Deposits and FSBI agree on multi-year and latest-year direction—this census paints a consistent vitality read.';
+    } else if (agreeMid) {
+      conclusion = ' Conclusion: Multi-year deposit and FSBI moves agree; latest YoY differs between series—vitality is favorable on the window with a split near-term picture.';
+    } else if (agreeNear) {
+      conclusion = ' Conclusion: Latest YoY aligns across series while multi-year deposit vs FSBI index changes diverge—near-term momentum matches more cleanly than the full-window story.';
+    } else {
+      conclusion = ' Conclusion: Horizon signals do not line up cleanly across both census lines—weigh the ~' + MV_WINDOW_YEARS + '-year FDIC and FSBI window first, then YoY, before a firm vitality call.';
+    }
+
+    return 'Vitality summary (weight the ~' + MV_WINDOW_YEARS + '-year window first): FDIC summed deposits for this geography changed about ' +
+      midDep + ' from ' + firstW.year + ' to ' + latestW.year + ' (June 30 filings in range). ' +
+      'FSBI statewide sales index (SA) changed about ' + midFsbi + ' over ~' + winM.length + ' month(s) through ' + newestM.period + '. ' +
+      'Near term (latest vs prior year / month): deposits ' + nearDep + '; FSBI sales ' + nearFsbi + '.' + tail + scope + conclusion;
   }
 
   function generateMarketVitalityInsights(result) {
@@ -1797,7 +1870,7 @@
     }
 
     if (fsbiLines.length && hasTrend) {
-      var synth = marketVitalitySynthesis(hasTrend ? trend[trend.length - 1] : null, result && result.fsbi, true);
+      var synth = marketVitalitySynthesis(result);
       if (synth) {
         insights.push({ priority: 4, text: synth });
       }
