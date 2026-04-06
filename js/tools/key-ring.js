@@ -121,7 +121,9 @@
 
   LA.KeyRingIds = {
     /** Storage id kept as vendor slug so keys saved under the old app still load */
-    BANKERSIQ_TRATES_API: 'bankersiq_luci_api'
+    BANKERSIQ_TRATES_API: 'bankersiq_luci_api',
+    /** Optional — FDIC BankFind Suite (api.fdic.gov); SOD works without a key today */
+    FDIC_BANKS_API: 'fdic_banks_api'
   };
 
   LA.KeyRing = {
