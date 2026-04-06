@@ -96,6 +96,18 @@
           '<div class="agent-section-title">Source data (in-memory only)</div>' +
           '<div id="source-data-files" class="source-data-list"></div>' +
         '</div>' +
+        '<div id="market-vitality-section" class="agent-section" style="display:none;">' +
+          '<div class="agent-section-title">Market geography</div>' +
+          '<p style="font-size:.82rem;color:var(--muted);margin:0 0 .75rem 0;line-height:1.45;">' +
+          '<strong>ZIP</strong> (<code style="font-size:.78rem;">ZIPBR</code> only for SOD), <strong>state</strong> (for city mode <code style="font-size:.78rem;">STALP</code> + FSBI), and <strong>city</strong> (<code style="font-size:.78rem;">CITYBR</code>). If ZIP is filled, FDIC uses that ZIP alone. For U.S. ZIPs, <strong>state is inferred</strong> for FSBI when blank (e.g. 05401 → VT).</p>' +
+          '<div style="display:grid;gap:.5rem;grid-template-columns:1fr 1fr;max-width:420px;">' +
+          '<label style="font-size:.78rem;color:var(--muted);">ZIP<input type="text" id="mv-zip-input" class="ai-input" maxlength="10" placeholder="78701" autocomplete="postal-code" style="display:block;margin-top:.25rem;width:100%;" /></label>' +
+          '<label style="font-size:.78rem;color:var(--muted);">State (2 letters)<input type="text" id="mv-state-input" class="ai-input" maxlength="2" placeholder="TX" autocomplete="address-level1" style="display:block;margin-top:.25rem;width:100%;text-transform:uppercase;" /></label>' +
+          '</div>' +
+          '<label style="font-size:.78rem;color:var(--muted);display:block;margin-top:.65rem;">City<input type="text" id="mv-city-input" class="ai-input" placeholder="Austin" autocomplete="address-level2" style="display:block;margin-top:.25rem;max-width:420px;width:100%;" /></label>' +
+          '<p style="font-size:.78rem;color:var(--muted);margin:.75rem 0 0 0;line-height:1.45;">' +
+          'Fiserv Small Business Index (FSBI) is inflation-adjusted by default</p>' +
+        '</div>' +
         '<div id="loan-treasury-section" class="agent-section" style="display:none;">' +
           '<div class="agent-section-title">Treasury rates (BankersIQ)</div>' +
           '<p style="font-size:.82rem;color:var(--muted);margin:0 0 .75rem 0;line-height:1.45;">' +
@@ -110,6 +122,10 @@
         '<div class="agent-actions">' +
           '<button type="button" id="run-btn" class="btn btn-primary">Run research</button>' +
         '</div>';
+      var mvSection = el('market-vitality-section');
+      if (mvSection) {
+        mvSection.style.display = agent.id === 'market-vitality' ? 'block' : 'none';
+      }
       var loanTreasury = el('loan-treasury-section');
       if (loanTreasury) {
         loanTreasury.style.display = agent.id === 'loan-profitability' ? 'block' : 'none';
@@ -213,11 +229,17 @@
         elResult.className = '';
       }
     } else if (result && result.error) {
-      if (elResult) { elResult.textContent = result.error; elResult.className = 'result-error'; }
+      if (elResult) {
+        var errTxt = result.error;
+        if (result.disclaimer) errTxt += '\n\n' + result.disclaimer;
+        elResult.textContent = errTxt;
+        elResult.className = 'result-error';
+      }
     } else if (result && result.summary) {
       if (elResult) {
         var head = result.summary;
         if (result.riskDisclaimer) head += '\n\n' + result.riskDisclaimer;
+        if (result.disclaimer) head += '\n\n' + result.disclaimer;
         elResult.textContent = head;
       }
     } else if (result && result.customerCount != null) {

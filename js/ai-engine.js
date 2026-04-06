@@ -948,12 +948,144 @@
     return result.fieldSignalLexicon;
   }
 
+  /**
+   * Natural-language answers for Market vitality (deposits + FSBI) without replaying full generateSummary.
+   */
+  function marketVitalityAskAnswer(raw, result) {
+    if (!result || typeof result !== 'object') return null;
+    var dt = result.depositTrend;
+    var hasDep2 = Array.isArray(dt) && dt.length >= 2;
+    var fsbi = result.fsbi;
+    var tool = LA.tools && LA.tools.fsbi;
+    var series = [];
+    if (fsbi && !fsbi.skipped && !fsbi.error) {
+      series = (fsbi.series && fsbi.series.length)
+        ? fsbi.series.slice()
+        : (tool && typeof tool.sortAndFilterStatewideSeries === 'function'
+          ? tool.sortAndFilterStatewideSeries(fsbi.data || [])
+          : []);
+    }
+    var hasFsbi = series.length >= 2;
+    if (!hasDep2 && !hasFsbi) return null;
+
+    var q = String(raw || '').trim();
+    var qLow = q.toLowerCase();
+
+    var asksTrend = /\btrends?\b/.test(qLow) || /\bmomentum\b/.test(qLow) || /\btrajectory\b/.test(qLow) ||
+      /\byoy\b/.test(qLow) || /\byear[\s-]*over[\s-]*year\b/.test(qLow) ||
+      /\bhow\s+(have|has)\b[\s\S]{0,48}\b(changed|moved|grown|done)\b/i.test(qLow);
+
+    var asksOneYear = /\b1[\s-]*year\b/.test(qLow) || /\bone[\s-]*year\b/.test(qLow) ||
+      /\b12[\s-]*month/.test(qLow) || /\btwelve[\s-]*month\b/.test(qLow) ||
+      /\b(last|past)\s+year\b/.test(qLow) || /\bin\s+the\s+last\s+year\b/.test(qLow);
+
+    var asksSeven = /\b7[\s-]*year|\bseven[\s-]*year|\b84[\s-]*month|\bmulti[\s-]*year\b|\bmid[\s-]*term\b/i.test(qLow);
+
+    if (!asksTrend && !asksOneYear && !asksSeven) return null;
+
+    if (/\b(average|mean|median|sum|total|count|how many|top\s+\d|bottom\s+\d)\b/i.test(q) &&
+      !asksTrend && !asksOneYear) {
+      return null;
+    }
+
+    var parts = [];
+    var MVY = 7;
+
+    if (hasDep2 && (asksOneYear || (asksTrend && !asksSeven))) {
+      var latest = dt[dt.length - 1];
+      var prev = dt[dt.length - 2];
+      var bL = latest.depositsBillions != null ? latest.depositsBillions : latest.depositsThousands / 1000000;
+      var bP = prev.depositsBillions != null ? prev.depositsBillions : prev.depositsThousands / 1000000;
+      var rL = Math.round(bL * 1000) / 1000;
+      var rP = Math.round(bP * 1000) / 1000;
+      parts.push(
+        'Deposits (FDIC SOD, consecutive filing years ' + prev.year + ' → ' + latest.year + '): ' +
+        'summed branch deposits moved from about $' + rP + 'B to about $' + rL + 'B for this geography.'
+      );
+      if (latest.yoyPct != null) {
+        parts.push(
+          'Year-over-year: ' + (latest.yoyPct >= 0 ? '+' : '') + latest.yoyPct + '% vs prior filing year.'
+        );
+      } else {
+        parts.push('Year-over-year percent change is not available (e.g. prior year total was zero).');
+      }
+      if (latest.branchRows != null) {
+        parts.push('Latest filing year uses ' + latest.branchRows + ' branch row(s) from the FDIC response.');
+      }
+    }
+
+    if (hasDep2 && asksSeven) {
+      var yEnd = dt[dt.length - 1].year;
+      var yStartCal = yEnd - (MVY - 1);
+      var win = [];
+      for (var wi = 0; wi < dt.length; wi++) {
+        if (dt[wi].year >= yStartCal && dt[wi].year <= yEnd) win.push(dt[wi]);
+      }
+      if (win.length >= 2) {
+        var fW = win[0];
+        var lW = win[win.length - 1];
+        var spanY = lW.year - fW.year;
+        if (spanY > 0 && fW.depositsThousands > 0) {
+          var totalPct = ((lW.depositsThousands - fW.depositsThousands) / fW.depositsThousands) * 100;
+          var cagr = (Math.pow(lW.depositsThousands / fW.depositsThousands, 1 / spanY) - 1) * 100;
+          parts.push(
+            'Deposits (~' + MVY + '-year calendar window ' + yStartCal + '–' + yEnd + ', ' + win.length +
+            ' filing year(s) in data): cumulative change about ' + (totalPct >= 0 ? '+' : '') +
+            Math.round(totalPct * 10) / 10 + '% (~' + (Math.round(cagr * 100) / 100) + '% annualized).'
+          );
+        }
+      }
+    }
+
+    if (hasFsbi && (asksOneYear || asksTrend || asksSeven)) {
+      var n = series[series.length - 1];
+      var yoyS = n.salesYoyPctSa != null ? n.salesYoyPctSa : n.salesYoyPctNsa;
+      var yoyT = n.transactionYoyPctSa != null ? n.transactionYoyPctSa : n.transactionYoyPctNsa;
+      var adj = result.fsbi.meta && result.fsbi.meta.inflationAdjusted === true ? 'inflation-adjusted' : 'nominal';
+      var geoFsbi = n.geo || (result.geo && result.geo.state) || '';
+      parts.push(
+        'FSBI (statewide' + (geoFsbi ? ', ' + geoFsbi : '') + ', ' + adj + ', month ' + n.period + '): ' +
+        'sales YoY ' + (yoyS != null ? (yoyS >= 0 ? '+' : '') + yoyS + '%' : 'n/a') +
+        '; card/transaction activity YoY ' + (yoyT != null ? (yoyT >= 0 ? '+' : '') + yoyT + '%' : 'n/a') + '.'
+      );
+      if (series.length >= 13) {
+        var p12 = series[series.length - 13];
+        var s0 = p12.salesIndexSa;
+        var s1 = n.salesIndexSa;
+        var t0 = p12.transactionalIndexSa;
+        var t1 = n.transactionalIndexSa;
+        if (s0 != null && s1 != null && s0 !== 0) {
+          var dS = Math.round(((s1 - s0) / s0) * 10000) / 100;
+          var dTT = (t0 != null && t1 != null && t0 !== 0)
+            ? Math.round(((t1 - t0) / t0) * 10000) / 100
+            : null;
+          var pace = '';
+          if (dTT != null && Math.abs(dTT) < Math.abs(dS) * 0.9 && dS > 0) {
+            pace = ' Transaction index lagged sales over that ~12-month span.';
+          } else if (dTT != null && Math.abs(dTT) > Math.abs(dS) * 1.1) {
+            pace = ' Transaction index outpaced sales over that ~12-month span.';
+          }
+          parts.push(
+            'Versus ~12 months earlier in the series: sales index (SA) about ' + (dS >= 0 ? '+' : '') + dS + '%' +
+            (dTT != null ? '; transactional index (SA) about ' + (dTT >= 0 ? '+' : '') + dTT + '%' : '') + '.' + pace
+          );
+        }
+      }
+    }
+
+    if (!parts.length) return null;
+    return parts.join('\n\n');
+  }
+
   function executeQuery(parsed, result) {
-    var qctx = mergeQueryContext(result);
     if (result && result.fieldSignalTest) {
       var gloss = answerFieldSignalGlossaryQuestion(parsed.raw, result);
       if (gloss) return gloss;
     }
+    var mvAsk = marketVitalityAskAnswer(parsed && parsed.raw, result);
+    if (mvAsk) return mvAsk;
+
+    var qctx = mergeQueryContext(result);
     var list = getResultRowList(result, qctx);
     if (!list.length) return 'No data available to query.';
 
@@ -1352,6 +1484,9 @@
       return (neg ? '-$' : '$') + integer + '.' + parts[1];
     }
     if (fmt === 'pct') return (val * 100).toFixed(2) + '%';
+    /* Already in percent points (e.g. 2.19 means 2.19%), not decimal fraction */
+    if (fmt === 'pctPoints') return (Math.round(val * 100) / 100).toFixed(2) + '%';
+    if (fmt === 'billions') return val == null ? 'N/A' : ('$' + (Math.round(val * 1000) / 1000).toFixed(2) + 'B');
     if (fmt === 'years') return val != null ? val.toFixed(1) + ' yrs' : 'N/A';
     if (fmt === 'int') return Math.round(val).toLocaleString();
     if (fmt === 'score') return Math.round(val * 100) / 100 + '';
@@ -1398,6 +1533,294 @@
   }
 
   /** Balance-like X vs outcome Y for insight correlation; never X === Y. */
+  /** Align SOD narrative and FSBI comparison window (training: short-to-midterm ~7 years). */
+  var MV_WINDOW_YEARS = 7;
+  var MV_WINDOW_MONTHS = MV_WINDOW_YEARS * 12;
+
+  /**
+   * FSBI statewide series: BankersIQ returns all months in one response when only state (+ inflation) is sent
+   * (e.g. inflationAdjusted=0&state=VT). Engine only chooses nominal vs inflation-adjusted; optional nudge from deposits.
+   */
+  function selectFsbiPlan(geo, depositTrend) {
+    var inflationAdjusted = false;
+    if (Array.isArray(depositTrend) && depositTrend.length >= 2) {
+      var latest = depositTrend[depositTrend.length - 1];
+      if (latest && latest.yoyPct != null && latest.yoyPct >= 6) {
+        inflationAdjusted = true;
+      }
+    }
+    return {
+      inflationAdjusted: inflationAdjusted,
+      rationale: ''
+    };
+  }
+
+  function fsbiSliceLastMonths(sortedSeries, n) {
+    if (!sortedSeries || !sortedSeries.length || !n) return [];
+    if (sortedSeries.length <= n) return sortedSeries.slice();
+    return sortedSeries.slice(sortedSeries.length - n);
+  }
+
+  function fsbiIndexPctChange(oldV, newV) {
+    if (oldV == null || newV == null || !isFinite(oldV) || oldV === 0) return null;
+    return Math.round(((newV - oldV) / oldV) * 10000) / 100;
+  }
+
+  /**
+   * FDIC SOD market vitality — narrative focused on deposit trends, not generic row stats.
+   */
+  function fsbiYoyLine(row) {
+    var yoyS = row.salesYoyPctSa != null ? row.salesYoyPctSa : row.salesYoyPctNsa;
+    var yoyT = row.transactionYoyPctSa != null ? row.transactionYoyPctSa : row.transactionYoyPctNsa;
+    return 'Sales YoY: ' + (yoyS != null ? yoyS + '%' : 'n/a') +
+      '; transactions YoY: ' + (yoyT != null ? yoyT + '%' : 'n/a');
+  }
+
+  function fsbiInsightLines(fsbi, geoLabel) {
+    if (!fsbi || fsbi.skipped) return [];
+    var hasSeries = (fsbi.series && fsbi.series.length) || (fsbi.data && fsbi.data.length);
+    if (fsbi.error && !hasSeries) {
+      return [{ priority: 6, text: 'FSBI: ' + fsbi.error }];
+    }
+    var tool = LA.tools && LA.tools.fsbi;
+    var series = (fsbi.series && fsbi.series.length)
+      ? fsbi.series
+      : (tool && typeof tool.sortAndFilterStatewideSeries === 'function'
+        ? tool.sortAndFilterStatewideSeries(fsbi.data || [])
+        : (fsbi.data || []).slice().sort(function (a, b) {
+          return String(a.period || '').localeCompare(String(b.period || ''));
+        }));
+    if (series.length) {
+      var win = fsbiSliceLastMonths(series, MV_WINDOW_MONTHS);
+      var oldest = win.length ? win[0] : series[0];
+      var newest = win.length ? win[win.length - 1] : series[series.length - 1];
+      var sub = newest.subSectorName || 'series';
+      var g = newest.geo || geoLabel || '';
+      var adjLabel = fsbi.meta && fsbi.meta.inflationAdjusted === true ? 'inflation-adjusted' : 'nominal';
+      var indexKind = fsbi.meta && fsbi.meta.inflationAdjusted === true
+        ? 'Inflation-adjusted Fiserv Small Business'
+        : 'Nominal Fiserv Small Business';
+      var lines = [];
+      lines.push({
+        priority: 8,
+        text: 'Fiserv Small Business Index (FSBI): ' + sub + (g ? ' — ' + g : '') +
+          ', last ' + win.length + ' month(s) (' + oldest.period + ' to ' + newest.period +
+          ', aligned with a ~' + MV_WINDOW_YEARS + '-year deposit window) (' + adjLabel + '). ' +
+          'Latest: ' + fsbiYoyLine(newest) + '.'
+      });
+      var s0 = oldest.salesIndexSa;
+      var s1 = newest.salesIndexSa;
+      var t0 = oldest.transactionalIndexSa;
+      var t1 = newest.transactionalIndexSa;
+      var pctS = fsbiIndexPctChange(s0, s1);
+      var pctT = fsbiIndexPctChange(t0, t1);
+      var yoyS = newest.salesYoyPctSa != null ? newest.salesYoyPctSa : newest.salesYoyPctNsa;
+      var yoyT = newest.transactionYoyPctSa != null ? newest.transactionYoyPctSa : newest.transactionYoyPctNsa;
+      if (pctS != null || pctT != null || yoyS != null || yoyT != null) {
+        var pace = '';
+        if (pctS != null && pctT != null) {
+          if (Math.abs(pctT) < Math.abs(pctS) * 0.85 && pctS > 0) {
+            pace = ' Transaction-linked activity grew more slowly than sales over this window.';
+          } else if (Math.abs(pctT) > Math.abs(pctS) * 1.15) {
+            pace = ' Transaction-linked activity moved faster than sales over this window.';
+          } else {
+            pace = ' Sales and transaction indexes moved at broadly similar pace over this window.';
+          }
+        }
+        lines.push({
+          priority: 7,
+          text: indexKind + ' Sales Index (SA) latest year-over-year change: ' +
+            (yoyS != null ? (yoyS >= 0 ? '+' : '') + yoyS + '%' : 'n/a') +
+            (pctS != null ? '; cumulative change over those ~' + MV_WINDOW_YEARS + ' years: ' + (pctS >= 0 ? '+' : '') + pctS + '%' : '') +
+            '. Transactional index (SA) YoY: ' + (yoyT != null ? (yoyT >= 0 ? '+' : '') + yoyT + '%' : 'n/a') +
+            (pctT != null ? '; cumulative over the window: ' + (pctT >= 0 ? '+' : '') + pctT + '%' : '') +
+            '.' + pace
+        });
+      }
+      return lines;
+    }
+    var trend = fsbi.trend;
+    if (trend && trend.length) {
+      var ok = trend.filter(function (t) { return t.row; });
+      if (!ok.length) return [];
+      var sorted = ok.slice().sort(function (a, b) { return String(a.period).localeCompare(String(b.period)); });
+      var o0 = sorted[0];
+      var n0 = sorted[sorted.length - 1];
+      var subL = (n0.row && n0.row.subSectorName) || 'sub-sector';
+      var gL = (n0.row && n0.row.geo) || geoLabel || '';
+      var idxA = o0.row.salesIndexSa;
+      var idxB = n0.row.salesIndexSa;
+      var idxD = (idxA != null && idxB != null) ? (Math.round((idxB - idxA) * 100) / 100) : null;
+      var adjL = fsbi.plan && fsbi.plan.inflationAdjusted === false ? 'nominal' : 'inflation-adjusted';
+      var out = [];
+      out.push({
+        priority: 8,
+        text: 'Fiserv Small Business Index (FSBI): ' + subL + (gL ? ' — ' + gL : '') +
+          ', ' + sorted.length + ' month(s) from ' + o0.period + ' to ' + n0.period +
+          ' (' + adjL + '). Latest: ' + fsbiYoyLine(n0.row) + '.' +
+          (idxD != null ? ' Sales index (SA) change over window: ' + (idxD >= 0 ? '+' : '') + idxD + ' pts.' : '')
+      });
+      return out;
+    }
+    return [];
+  }
+
+  function marketVitalitySynthesis(latestDep, fsbi, hasFsbiLines) {
+    if (!latestDep || !hasFsbiLines || !fsbi) return null;
+    var tool = LA.tools && LA.tools.fsbi;
+    var series = (fsbi.series && fsbi.series.length)
+      ? fsbi.series
+      : (tool && typeof tool.sortAndFilterStatewideSeries === 'function'
+        ? tool.sortAndFilterStatewideSeries(fsbi.data || [])
+        : []);
+    if (!series.length) return null;
+    var newest = series[series.length - 1];
+    var depYoy = latestDep.yoyPct;
+    var fsbiYoy = newest.salesYoyPctSa != null ? newest.salesYoyPctSa : newest.salesYoyPctNsa;
+    var depTone = depYoy == null ? 'unclear' : (depYoy >= 0 ? 'positive' : 'negative');
+    var fsbiTone = fsbiYoy == null ? 'unclear' : (fsbiYoy >= 0 ? 'positive' : 'negative');
+    var sync = depTone === fsbiTone && depTone !== 'unclear';
+    var body = 'Read together, recent branch-reported deposits (a liquidity / local banking footprint signal) are ' +
+      depTone + ' year-on-year, while statewide small-business sales momentum in FSBI is ' + fsbiTone + ' in the latest month. ';
+    if (sync && depTone !== 'unclear') {
+      body += 'When both move in the same direction, it can support a coherent short-term read on market vitality; mixed signals warrant a narrower geography or more local data.';
+    } else {
+      body += 'Mixed signals between deposit aggregates and card-based small-business activity are common—use both as directional context, not a full census of the trade area.';
+    }
+    return body;
+  }
+
+  function generateMarketVitalityInsights(result) {
+    var trend = result && result.depositTrend;
+    var geo = result && result.geo;
+    var hasTrend = Array.isArray(trend) && trend.length > 0 && geo;
+    var fsbiLines = fsbiInsightLines(result && result.fsbi, geo && geo.label);
+
+    if (!hasTrend && !fsbiLines.length) return null;
+
+    var insights = [];
+    var label = (geo && geo.label) || 'Selected market';
+
+    if (typeof console !== 'undefined' && console.debug) {
+      if (geo && geo.stateInferredFromZip) {
+        console.debug('[Copernicus market-vitality] State inferred from ZIP:', geo.zip || '', '→', geo.state || '');
+      }
+    }
+
+    if (hasTrend) {
+      var latest = trend[trend.length - 1];
+      var first = trend[0];
+      var yEndCal = latest.year;
+      var yStartCal = yEndCal - (MV_WINDOW_YEARS - 1);
+      var trendWin = [];
+      for (var tw = 0; tw < trend.length; tw++) {
+        var yy = trend[tw].year;
+        if (yy >= yStartCal && yy <= yEndCal) trendWin.push(trend[tw]);
+      }
+      if (!trendWin.length) {
+        trendWin = trend.slice(Math.max(0, trend.length - MV_WINDOW_YEARS));
+      }
+      var firstW = trendWin[0];
+      var latestW = trendWin[trendWin.length - 1];
+      var bLatest = latest.depositsBillions != null ? latest.depositsBillions : latest.depositsThousands / 1000000;
+      var bLatestR = Math.round(bLatest * 1000) / 1000;
+
+      if (typeof console !== 'undefined' && console.debug &&
+        first.branchRows != null && latest.branchRows != null && first.branchRows !== latest.branchRows) {
+        console.debug('[Copernicus market-vitality] FDIC branch row counts by year:', first.year, first.branchRows,
+          '→', latest.year, latest.branchRows);
+      }
+
+      insights.push({
+        priority: 10,
+        text: 'Market vitality (FDIC Summary of Deposits): ' + label + '. Short-to-midterm focus: calendar years ' +
+          yStartCal + '–' + yEndCal + ' (' + MV_WINDOW_YEARS + ' June-30 filing cycles). ' +
+          'FDIC pull includes ' + trendWin.length + ' year(s) with data in that window' +
+          (trend.length > trendWin.length ? '; ' + trend.length + ' years total in the result' : '') +
+          '. Latest filing year ' + latest.year + ': about $' + bLatestR +
+          'B in summed branch-reported deposits for branches matching this geography.'
+      });
+
+      if (latest.branchRows != null && latest.branchRows <= 5) {
+        insights.push({
+          priority: 9,
+          text: 'Note: the latest year sums only ' + latest.branchRows + ' branch row(s) returned for this filter—totals reflect that filing slice, not necessarily the whole market.'
+        });
+      }
+
+      if (latest.yoyPct != null && trend.length >= 2) {
+        var prevY = trend[trend.length - 2].year;
+        var dir = latest.yoyPct >= 0 ? 'growth' : 'contraction';
+        insights.push({
+          priority: 9,
+          text: 'Recent trend: year-over-year ' + dir + ' of ' + Math.abs(latest.yoyPct).toFixed(2) +
+            '% in branch-reported deposits from ' + prevY + ' to ' + latest.year + '.'
+        });
+      }
+
+      if (trendWin.length >= 2 && firstW.depositsThousands > 0 && latestW.depositsThousands > 0) {
+        var span = latestW.year - firstW.year;
+        if (span > 0) {
+          var totalPct = ((latestW.depositsThousands - firstW.depositsThousands) / firstW.depositsThousands) * 100;
+          var cagr = (Math.pow(latestW.depositsThousands / firstW.depositsThousands, 1 / span) - 1) * 100;
+          insights.push({
+            priority: 8,
+            text: 'Multi-year arc (same ' + MV_WINDOW_YEARS + '-year window): from ' + firstW.year + ' to ' + latestW.year +
+              ', the deposit aggregate moved ' +
+              (totalPct >= 0 ? 'up' : 'down') + ' about ' + Math.abs(Math.round(totalPct * 10) / 10) +
+              '% over ' + span + ' year(s) (~' + (Math.round(cagr * 100) / 100) + '% annualized).'
+          });
+        }
+      }
+
+      if (result.fdic && result.fdic.truncated) {
+        insights.push({
+          priority: 5,
+          text: 'Note: FDIC rows were capped; treat comparisons as directional unless the geography is narrowed.'
+        });
+      }
+    } else if (geo) {
+      insights.push({
+        priority: 9,
+        text: 'Market vitality: no FDIC SOD branch aggregate for ' + label +
+          ' — check ZIP, city spelling, or state. FSBI below may still apply for the resolved state (statewide series).'
+      });
+    }
+
+    for (var fi = 0; fi < fsbiLines.length; fi++) insights.push(fsbiLines[fi]);
+
+    if (result.fsbi && result.fsbi.note) {
+      insights.push({ priority: 5, text: 'FSBI note: ' + result.fsbi.note });
+    }
+    if (result.fsbi && result.fsbi.error && !(result.fsbi.data && result.fsbi.data.length)) {
+      insights.push({ priority: 5, text: 'FSBI request failed: ' + result.fsbi.error });
+    }
+
+    if (fsbiLines.length && hasTrend) {
+      var synth = marketVitalitySynthesis(hasTrend ? trend[trend.length - 1] : null, result && result.fsbi, true);
+      if (synth) {
+        insights.push({ priority: 4, text: synth });
+      }
+    } else if (fsbiLines.length) {
+      insights.push({
+        priority: 4,
+        text: 'FSBI reflects statewide card/merchant small-business activity; pair with local SOD deposits when your ZIP or city aligns with that state.'
+      });
+    } else {
+      insights.push({
+        priority: 4,
+        text: 'This slice emphasizes branch-reported deposits from FDIC SOD; add FSBI when state is available for a read on small-business sales and transactions.'
+      });
+    }
+
+    insights.sort(function (a, b) { return b.priority - a.priority; });
+    return {
+      summary: insights.map(function (ins) { return ins.text; }).join(' '),
+      insights: insights,
+      statistics: null
+    };
+  }
+
   function pickCorrelationFields(avail, primary) {
     if (!avail || !avail.length || !primary) return null;
     var balanceKey = null;
@@ -1420,6 +1843,9 @@
     if (result && result.fieldSignalTestInsights && result.fieldSignalTest) {
       return result.fieldSignalTestInsights;
     }
+    var mvInsights = generateMarketVitalityInsights(result);
+    if (mvInsights) return mvInsights;
+
     var qctxInsight = mergeQueryContext(result);
     var list = getResultRowList(result, qctxInsight);
     if (!list.length) return { summary: 'No data to analyze.', insights: [] };
@@ -1600,6 +2026,7 @@
     return Promise.resolve(text);
   };
 
+  LA.AI.selectFsbiPlan = selectFsbiPlan;
   LA.AI.classifyFields = classifyFields;
   LA.AI.isRiskOrRatingLikeCustomerIdHeader = isRiskOrRatingLikeCustomerIdHeader;
   LA.AI.isImplausibleCustomerIdValues = isImplausibleCustomerIdValues;
