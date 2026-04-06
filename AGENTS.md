@@ -53,6 +53,10 @@ Copernicus.register(Copernicus.Agent({
 
 Use **`return Promise.resolve(…)`** or **`return fetch(…).then(…)`** when calling external APIs (e.g. BankersIQ). `Copernicus.run` already unwraps Promises.
 
+### FDIC Summary of Deposits (market vitality)
+
+**`js/tools/fdic-sod.js`** calls **`https://api.fdic.gov/banks/sod`** with Elasticsearch-style **`filters`**: **`ZIPBR:#####`** only for ZIP (no `STALP` AND — avoids dropping rows that still match the public SOD ZIP extract), or **`CITYBR:"City" AND STALP:XX`**. Paginates (`limit` / `offset`); sums **DEPSUMBR** (else **DEPSUM**) in **$ thousands** by **YEAR**. Optional **`api_key`**. Browser **CORS** must allow `api.fdic.gov`.
+
 ### Treasury curve (interest-rate risk)
 
 **`js/tools/fred-client.js`** fetches the monthly curve only from **[BankersIQ trates](https://bankersiq.com/api/luci/trates/)** (vendor URL path `/api/luci/trates/`) with **`api_key`** (CORS-friendly JSON). The key is read from **`Copernicus.KeyRing`** (`KeyRingIds.BANKERSIQ_TRATES_API` → stored id `bankersiq_luci_api`). Override base URL (no query string): **`Copernicus.Fred.bankersIqTratesUrl`**.
@@ -91,3 +95,4 @@ Use **`Copernicus.KeyRing`** (`js/tools/key-ring.js`): IndexedDB with localStora
 | `js/agents/share-of-wallet.js` | Multi required types, no external API. |
 | `js/agents/loan-profitability.js` | Required + **optional** type; **BankersIQ** trates + **KeyRing** `bankersiq_luci_api`; **`riskDisclaimer`**. |
 | `js/agents/field-signal-test.js` | Audits **field → role** mappings per ingested file; `fieldSignalLexicon`, `fieldSignalReports`. |
+| `js/agents/market-vitality.js` | **No CSV** — UI: **ZIP, state, city** only. **FDIC SOD** (`js/tools/fdic-sod.js`); **`inferUsStateFromZip`** + **`js/data/zip5-to-state.js`** when state is blank. **FSBI**: one call `state` + `inflationAdjusted` (no period/subSector) → full ALL/ALL series per [BankersIQ](https://bankersiq.com/api/FSBI/); `js/tools/fsbi-client.js`; optional **`KeyRingIds.BANKERSIQ_TRATES_API`**. ZIP data: `scripts/build-zip5-state.py`. |
