@@ -244,6 +244,10 @@
     id: 'banking.loan-profitability',
     name: 'Loan Profitability',
     domain: 'banking',
+    riskDisclaimer:
+      'Outputs are illustrative spread math only, not ALM, FTP, hedge, or fair-value advice. ' +
+      'Treasury yields are loaded from the configured curve API; confirm they are fit for purpose and current under your model risk / IRR policy. ' +
+      'Mis-stated discount or benchmark rates can materially misstate economic value and NII.',
     assumptions: {
       defaultTermMonths: 60,
       annualServicingBps: 25
@@ -260,14 +264,34 @@
         return (balance || 0) * (bps / 10000) / 12;
       }
     },
-    context: 'Matches each loan term (months) to a monthly Treasury curve from BankersIQ (HTTPS /api/luci/trates/ with api_key via Copernicus.KeyRing). ' +
-      'Service outages, relay or proxy misconfiguration, and stale API data create interest-rate and spread risk in reported margins. ' +
-      'Note rate and Treasury are both normalized to **percent points** (7 = 7%, 4.81 = 4.81%): CSV values in [0, 0.5) are treated as decimal fractions (0.07 → 7) to match API decimals (0.0481 → 4.81). ' +
-      'Spread = note rate minus matched Treasury (same units). Gross monthly spread = balance × (spread/100) / 12. ' +
-      'Net subtracts servicing as balance × (annualServicingBps/10000) / 12. Not ALM, FTP, hedge, or OAS.',
+    context: 'Monthly Treasury curve from BankersIQ (HTTPS /api/luci/trates/ with api_key via Copernicus.KeyRing). ' +
+      'Note rate and Treasury are **percent points** (7 = 7%); CSV values in [0, 0.5) are treated as decimals (0.07 → 7). ' +
+      '**Remaining months** for amortization: maturity date minus as-of (when maturity is present and valid), else original term minus months since open date, else mapped term / default. ' +
+      '**Payment:** use file payment when it covers at least first-month interest (non-monthly frequencies are converted to a monthly equivalent); otherwise level-payment amortization from current balance, rate, and remaining months. ' +
+      'Each month: Treasury at the then-remaining tenor, spread = note − Treasury, gross spread cash = balance × spread / 12; principal paydown = payment minus contract interest (rate/12 on balance); balance declines. ' +
+      'Servicing = balance × (annualServicingBps/10000) / 12 per month. **estNetSpreadMonthly** is the first remaining month; **estNetSpreadRemaining** sums all remaining months. ' +
+      'Balloons, IO, revolvers, and odd accrual are not modeled. Not ALM, FTP, hedge, or OAS.',
     sources: [
       'BankersIQ — Treasury rates by term (trates)',
       'https://bankersiq.com/api/luci/trates/'
+    ]
+  });
+
+  /* ── Market vitality (FDIC SOD + FSBI) ───────────────────────────── */
+
+  LA.Skills.register({
+    id: 'banking.market-vitality',
+    name: 'Market vitality',
+    domain: 'banking',
+    assumptions: {},
+    context: 'Aggregates FDIC Summary of Deposits by filing year for a ZIP (ZIPBR only, no STALP on ZIP) or city+state (CITYBR, STALP); DEPSUMBR in $ thousands. ' +
+      'FSBI: one BankersIQ GET with state (+ inflationAdjusted); vendor returns the full statewide monthly series (ALL/ALL). selectFsbiPlan chooses nominal vs inflation-adjusted. State from user or ZIP lookup (ZipStateData). Optional api_key from KeyRing if saved on loan panel. ' +
+      'FSBI is usually state-level.',
+    sources: [
+      'FDIC BankFind Suite — Summary of Deposits',
+      'https://api.fdic.gov/banks/sod',
+      'BankersIQ — Fiserv Small Business Index',
+      'https://bankersiq.com/api/FSBI/'
     ]
   });
 
@@ -287,8 +311,10 @@
       idFields: ['reference', 'customerName', 'customerId', 'customer_id'],
       unprofitableMetricKey: 'monthlyProfit',
       fieldCatalog: [
-        { key: 'customerName', labels: ['name', 'customer name', 'full name', 'fullname', 'display name'], fmt: 'text' },
-        { key: 'reference', labels: ['reference', 'label', 'display', 'who'], fmt: 'text' },
+        { key: 'customerName', labels: ['name', 'customer name', 'full name', 'fullname', 'display name', 'borrower'], fmt: 'text' },
+        { key: 'customerId', labels: ['customer', 'customer id', 'portfolio', 'relationship id'], fmt: 'text' },
+        { key: 'reference', labels: ['reference', 'label', 'display', 'who', 'loan', 'loan number', 'account', 'account id'], fmt: 'text' },
+        { key: 'balance', labels: ['outstanding', 'principal', 'outstanding balance', 'loan balance', 'note balance'], fmt: 'dollar' },
         { key: 'totalBalance', labels: ['balance', 'balances', 'ledger', 'checking balance', 'average balance', 'avg balance'], fmt: 'dollar' },
         { key: 'totalDeposits', labels: ['deposits', 'deposit', 'total deposits', 'deposit balance', 'checking deposits'], fmt: 'dollar' },
         { key: 'monthlyProfit', labels: ['profit', 'profits', 'monthly profit', 'p and l', 'pnl', 'income', 'earnings'], fmt: 'dollar' },
@@ -306,10 +332,34 @@
         { key: 'shareOfWallet', labels: ['sow', 'share of wallet', 'wallet', 'wallet share'], fmt: 'score' },
         { key: 'depthScore', labels: ['depth', 'relationship depth', 'depth score', 'score'], fmt: 'score' },
         { key: 'totalLoans', labels: ['loans', 'loan', 'loan balance', 'total loans'], fmt: 'dollar' },
-        { key: 'treasuryAnnualPct', labels: ['treasury', 'treasury yield', 'risk free rate'], fmt: 'pct' },
-        { key: 'spreadAnnualPct', labels: ['spread', 'margin over treasury', 'loan spread'], fmt: 'pct' },
-        { key: 'estNetSpreadMonthly', labels: ['net spread monthly', 'loan contribution', 'monthly spread profit'], fmt: 'dollar' },
-        { key: 'sourceFileType', labels: ['mortgage', 'loans source', 'file type'], fmt: 'text' }
+        { key: 'rateAnnualPct', labels: ['note rate', 'coupon', 'apr', 'loan rate', 'contract rate'], fmt: 'pct' },
+        { key: 'termMonths', labels: ['term', 'remaining term', 'tenor', 'months left', 'amortization'], fmt: 'int' },
+        { key: 'contractTermMonths', labels: ['original term', 'contract term', 'term at origination'], fmt: 'int' },
+        { key: 'remainingMonths', labels: ['remaining months', 'months remaining', 'payments left'], fmt: 'int' },
+        { key: 'paymentMonthly', labels: ['payment', 'p i', 'p&i', 'monthly payment', 'installment'], fmt: 'dollar' },
+        { key: 'paymentSource', labels: ['payment source', 'pmt source'], fmt: 'text' },
+        { key: 'treasuryAnnualPct', labels: ['treasury', 'treasury yield', 'risk free', 'matched treasury', 'benchmark rate'], fmt: 'pct' },
+        { key: 'spreadAnnualPct', labels: ['spread', 'margin over treasury', 'loan spread', 'nim'], fmt: 'pct' },
+        { key: 'estGrossSpreadMonthly', labels: ['gross spread', 'gross spread monthly', 'first month gross spread'], fmt: 'dollar' },
+        { key: 'estServicingMonthly', labels: ['servicing', 'servicing cost monthly'], fmt: 'dollar' },
+        { key: 'estNetSpreadMonthly', labels: ['net spread', 'net spread monthly', 'loan contribution', 'monthly spread profit'], fmt: 'dollar' },
+        { key: 'estGrossSpreadRemaining', labels: ['lifetime gross spread', 'total gross spread remaining', 'cumulative gross spread'], fmt: 'dollar' },
+        { key: 'estServicingRemaining', labels: ['lifetime servicing', 'total servicing remaining'], fmt: 'dollar' },
+        { key: 'estNetSpreadRemaining', labels: ['lifetime net spread', 'total net spread remaining', 'npv spread sum'], fmt: 'dollar' },
+        { key: 'sourceFileType', labels: ['mortgage', 'loans source', 'file type'], fmt: 'text' },
+        { key: 'depositsBillions', labels: ['deposits', 'deposit', 'sod', 'fdic', 'billions', 'market'], fmt: 'billions' },
+        { key: 'depositsThousands', labels: ['deposits thousands', 'depsum', 'sod thousands'], fmt: 'dollar' },
+        { key: 'yoyPct', labels: ['yoy', 'growth', 'year over year', 'deposit growth', 'change'], fmt: 'pctPoints' },
+        { key: 'year', labels: ['year', 'filing year', 'june 30', 'sod year'], fmt: 'int' },
+        { key: 'branchRows', labels: ['branches', 'branch count', 'rows', 'locations'], fmt: 'int' },
+        { key: 'salesIndexSa', labels: ['fsbi', 'fsbi sales index', 'small business sales index'], fmt: 'score' },
+        { key: 'transactionalIndexSa', labels: ['fsbi transactional', 'transaction index', 'card activity index'], fmt: 'score' },
+        { key: 'salesYoyPctSa', labels: ['fsbi sales yoy', 'small business sales yoy'], fmt: 'pctPoints' },
+        { key: 'salesYoyPctNsa', labels: ['fsbi sales yoy nsa', 'sales yoy not seasonally adjusted'], fmt: 'pctPoints' },
+        { key: 'transactionYoyPctSa', labels: ['fsbi transaction yoy', 'transaction count yoy'], fmt: 'pctPoints' },
+        { key: 'transactionYoyPctNsa', labels: ['fsbi transaction yoy nsa'], fmt: 'pctPoints' },
+        { key: 'subSectorName', labels: ['sub sector', 'sub-sector', 'fsbi category'], fmt: 'text' },
+        { key: 'sectorName', labels: ['sector', 'fsbi sector'], fmt: 'text' }
       ]
     }
   });
