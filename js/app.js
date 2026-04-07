@@ -375,6 +375,71 @@
     });
   }
 
+  function copyTextToClipboard(str) {
+    var s = String(str || '');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(s);
+    }
+    return new Promise(function (resolve, reject) {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = s;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        resolve();
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  var COPY_TSV_ICON_SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+  function renderAiQueryResponse(container, text, tsv) {
+    if (!container) return;
+    container.textContent = '';
+    container.className = 'ai-content';
+    var pre = document.createElement('pre');
+    pre.className = 'ai-query-response-text';
+    pre.textContent = text || '';
+    container.appendChild(pre);
+    if (tsv && String(tsv).trim()) {
+      var toolbar = document.createElement('div');
+      toolbar.className = 'ai-tsv-toolbar';
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn ai-copy-tsv-btn';
+      btn.setAttribute('aria-label', 'Copy tab-separated table for Excel');
+      btn.title = 'Copy tab-separated table for Excel';
+      btn.innerHTML = COPY_TSV_ICON_SVG + '<span>Copy table</span>';
+      btn.addEventListener('click', function () {
+        copyTextToClipboard(tsv).then(function () {
+          var span = btn.querySelector('span');
+          if (span) span.textContent = 'Copied!';
+          setTimeout(function () {
+            var sp = btn.querySelector('span');
+            if (sp) sp.textContent = 'Copy table';
+          }, 2000);
+        }).catch(function () {
+          var span = btn.querySelector('span');
+          if (span) span.textContent = 'Copy failed';
+          setTimeout(function () {
+            var sp = btn.querySelector('span');
+            if (sp) sp.textContent = 'Copy table';
+          }, 2000);
+        });
+      });
+      toolbar.appendChild(btn);
+      container.appendChild(toolbar);
+    }
+  }
+
   function triggerAIExplain(result, agentName) {
     var panel = el('panel-ai');
     var explainEl = el('ai-explain');
@@ -440,10 +505,17 @@
     LA.AI.ask(question, lastResult, function onChunk(text) {
       responseEl.textContent = text;
       responseEl.className = 'ai-content';
-    }).then(function (finalText) {
+    }).then(function (res) {
+      var finalText;
+      var tsv = null;
+      if (res && typeof res === 'object' && 'text' in res) {
+        finalText = res.text;
+        tsv = res.tsv || null;
+      } else {
+        finalText = res;
+      }
       if (finalText) {
-        responseEl.textContent = finalText;
-        responseEl.className = 'ai-content';
+        renderAiQueryResponse(responseEl, finalText, tsv);
       } else {
         responseEl.textContent = 'Could not generate a response.';
         responseEl.className = 'ai-content loading';

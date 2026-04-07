@@ -1089,16 +1089,17 @@
     var list = getResultRowList(result, qctx);
     if (!list.length) return 'No data available to query.';
 
+    var idToNameMap = buildCustomerIdToNameMap(result);
     var available = collectNumericKeys(list);
     var hint = extractMetricHint(parsed.raw, qctx, available);
     var metric = resolveMetricField(parsed.raw, list, hint, qctx);
     if (!metric) metric = detectPrimaryMetric(list, qctx);
 
     if (parsed.intent === 'rank') {
-      return executeRank(list, metric, parsed.count, parsed.dir || 'desc', qctx, parsed);
+      return executeRank(list, metric, parsed.count, parsed.dir || 'desc', qctx, parsed, idToNameMap);
     }
     if (parsed.intent === 'filter') {
-      return executeFilter(list, metric, parsed, qctx);
+      return executeFilter(list, metric, parsed, qctx, idToNameMap);
     }
     if (parsed.intent === 'aggregate') {
       return executeAggregate(list, metric, parsed.fn || 'avg', qctx);
@@ -1139,6 +1140,105 @@
     return '?';
   }
 
+  /**
+   * customerId → display name from ingested Customer information + row.customerName.
+   * Mirrors framework directory key normalization (string + rounded numeric alias).
+   */
+  function buildCustomerIdToNameMap(result) {
+    var map = Object.create(null);
+    if (LA.Data && typeof LA.Data.getState === 'function') {
+      try {
+        var st = LA.Data.getState();
+        var cd = st && st.customerDirectory;
+        if (cd && typeof cd === 'object') {
+          for (var k in cd) {
+            if (!Object.prototype.hasOwnProperty.call(cd, k)) continue;
+            var disp = cd[k];
+            if (disp == null || String(disp).trim() === '') continue;
+            var key = String(k).trim();
+            map[key] = String(disp).trim();
+            var cidNum = Number(key.replace(/,/g, ''));
+            if (!isNaN(cidNum) && isFinite(cidNum) && Math.abs(cidNum) < 1e15) {
+              var cCanon = String(Math.round(cidNum));
+              if (cCanon !== key && map[cCanon] == null) map[cCanon] = String(disp).trim();
+            }
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+    var rows = result && result.customers;
+    if (!Array.isArray(rows)) rows = result && result.shareOfWallet;
+    if (Array.isArray(rows)) {
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var id = r.customerId != null ? String(r.customerId).trim() : '';
+        if (!id && r.customer_id != null) id = String(r.customer_id).trim();
+        var nm = r.customerName != null ? String(r.customerName).trim() : '';
+        if (id && nm) {
+          map[id] = nm;
+          var nNum = Number(id.replace(/,/g, ''));
+          if (!isNaN(nNum) && isFinite(nNum) && Math.abs(nNum) < 1e15) {
+            var nCanon = String(Math.round(nNum));
+            if (nCanon !== id && map[nCanon] == null) map[nCanon] = nm;
+          }
+        }
+      }
+    }
+    return map;
+  }
+
+  /** Spreadsheet column: prefer customer name over raw id (directory + row). */
+  function rowSpreadsheetLabel(row, qctx, idToNameMap) {
+    if (!row) return '?';
+    var nm = row.customerName != null ? String(row.customerName).trim() : '';
+    if (nm) return nm;
+    var id = row.customerId != null ? String(row.customerId).trim() : '';
+    if (!id && row.customer_id != null) id = String(row.customer_id).trim();
+    if (id && idToNameMap && idToNameMap[id]) return idToNameMap[id];
+    if (id) {
+      var nNum = Number(id.replace(/,/g, ''));
+      if (!isNaN(nNum) && isFinite(nNum) && Math.abs(nNum) < 1e15) {
+        var nCanon = String(Math.round(nNum));
+        if (idToNameMap && idToNameMap[nCanon]) return idToNameMap[nCanon];
+      }
+    }
+    return rowCustomerId(row, qctx);
+  }
+
+  function spreadsheetEntityHeader(qctx) {
+    var colEnt = qctx && qctx.entityLabel ? qctx.entityLabel : 'Name';
+    return colEnt === 'Customer' ? 'Customer name' : colEnt;
+  }
+
+  /** Contiguous tab-separated block (Rank + header / numeric rows) for Excel paste + copy UI. */
+  function extractTsvBlockForCopy(fullText) {
+    var lines = String(fullText || '').split(/\r?\n/);
+    var started = false;
+    var block = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (line.indexOf('\t') === -1) {
+        if (started && block.length) break;
+        continue;
+      }
+      var cells = line.split('\t');
+      if (cells.length < 2) {
+        if (started && block.length) break;
+        continue;
+      }
+      var c0 = cells[0].trim();
+      if (!started) {
+        if (c0 === 'Rank' || /^\d+$/.test(c0)) {
+          started = true;
+          block.push(line);
+        }
+        continue;
+      }
+      block.push(line);
+    }
+    return block.length ? block.join('\n') : null;
+  }
+
   var TAB = '\t';
 
   /** Tab-separated header + rows for pasting into Excel / docs. */
@@ -1153,11 +1253,14 @@
     return lines.join('\n');
   }
 
-  function executeRank(list, metric, count, dir, qctx, parsed) {
+  function executeRank(list, metric, count, dir, qctx, parsed, idToNameMap) {
+    var idMap = idToNameMap || {};
+    var rowLab = function (r) { return rowSpreadsheetLabel(r, qctx, idMap); };
     var info = getMetricInfo(metric, qctx);
     var superWord = dir === 'asc' ? 'Lowest' : 'Highest';
     var ent = qctx && qctx.entityLabel ? qctx.entityLabel : 'Record';
     var plural = qctx && qctx.entityPlural ? qctx.entityPlural : 'records';
+    var tableEnt = spreadsheetEntityHeader(qctx);
 
     if (parsed && parsed.rankAllExtremeTies) {
       var values = list.map(function (r) { return rowNumeric(r, metric); });
@@ -1171,15 +1274,13 @@
         return dir === 'asc' ? va - vb : vb - va;
       });
       if (!tied.length) return 'No data available to query.';
-      var colEnt = qctx && qctx.entityLabel ? qctx.entityLabel : 'Name';
       var tieCaption = tied.length === 1
         ? 'Only one ' + (qctx && qctx.entityLabel ? qctx.entityLabel.toLowerCase() : 'record') +
           ' has the ' + superWord.toLowerCase() + ' ' + info.label + ': ' + ent + ' ' +
-          rowCustomerId(tied[0], qctx) + ' — ' + formatValue(extreme, info.fmt) + '.'
+          rowLab(tied[0]) + ' — ' + formatValue(extreme, info.fmt) + '.'
         : 'All ' + tied.length + ' ' + plural + ' tied for ' + superWord.toLowerCase() + ' ' + info.label +
           ' (' + formatValue(extreme, info.fmt) + '). Tab-separated (paste into a spreadsheet or report):';
-      var tieTable = formatMetricTable(colEnt, info.label, tied,
-        function (r) { return rowCustomerId(r, qctx); },
+      var tieTable = formatMetricTable(tableEnt, info.label, tied, rowLab,
         function (r) { return formatValue(rowNumeric(r, metric), info.fmt); }
       );
       return tied.length === 1 ? tieCaption : tieCaption + '\n\n' + tieTable;
@@ -1193,14 +1294,12 @@
     var top = sorted.slice(0, count);
 
     var label = dir === 'asc' ? 'Bottom' : 'Top';
-    var colEnt = qctx && qctx.entityLabel ? qctx.entityLabel : 'Name';
     var headline = count === 1 && top.length === 1
-      ? superWord + ' ' + info.label + ': ' + ent + ' ' + rowCustomerId(top[0], qctx) +
+      ? superWord + ' ' + info.label + ': ' + ent + ' ' + rowLab(top[0]) +
         ' — ' + formatValue(rowNumeric(top[0], metric), info.fmt) + '.'
       : label + ' ' + top.length + ' ' + plural + ' by ' + info.label +
         '. Tab-separated (paste into Excel or another report):';
-    var tableBlock = formatMetricTable(colEnt, info.label, top,
-      function (r) { return rowCustomerId(r, qctx); },
+    var tableBlock = formatMetricTable(tableEnt, info.label, top, rowLab,
       function (r) { return formatValue(rowNumeric(r, metric), info.fmt); }
     );
     var total = list.reduce(function (s, r) { return s + rowNumeric(r, metric); }, 0);
@@ -1219,7 +1318,9 @@
     return headline + '\n\n' + tableBlock + pctNote;
   }
 
-  function executeFilter(list, metric, parsed, qctx) {
+  function executeFilter(list, metric, parsed, qctx, idToNameMap) {
+    var idMap = idToNameMap || {};
+    var rowLab = function (r) { return rowSpreadsheetLabel(r, qctx, idMap); };
     var filtered;
     if (parsed.preset === 'unprofitable') {
       var defKey = qctx && qctx.unprofitableMetricKey ? qctx.unprofitableMetricKey : 'monthlyProfit';
@@ -1251,10 +1352,9 @@
 
     if (filtered.length <= 10) {
       filtered.sort(function (a, b) { return rowNumeric(b, metric) - rowNumeric(a, metric); });
-      var colEnt = qctx && qctx.entityLabel ? qctx.entityLabel : 'Name';
+      var tableEnt = spreadsheetEntityHeader(qctx);
       result += '\n\nTab-separated (paste into a spreadsheet or report):\n\n';
-      result += formatMetricTable(colEnt, info.label, filtered,
-        function (r) { return rowCustomerId(r, qctx); },
+      result += formatMetricTable(tableEnt, info.label, filtered, rowLab,
         function (r) { return formatValue(rowNumeric(r, metric), info.fmt); }
       );
     }
@@ -1923,6 +2023,7 @@
     var list = getResultRowList(result, qctxInsight);
     if (!list.length) return { summary: 'No data to analyze.', insights: [] };
 
+    var idNameMapInsight = buildCustomerIdToNameMap(result);
     var avail = collectNumericKeys(list);
     var insights = [];
     var primary = null;
@@ -2027,7 +2128,7 @@
         priority: 5,
         text: outliers.length + ' outlier' + (outliers.length !== 1 ? 's' : '') +
           ' on ' + info.label + ' beyond 1.5× IQR. Most extreme: ' + entLab + ' ' +
-          rowCustomerId(sorted[0], qctxInsight) + ' at ' +
+          rowSpreadsheetLabel(sorted[0], qctxInsight, idNameMapInsight) + ' at ' +
           formatValue(rowNumeric(sorted[0], primary), info.fmt) + '.'
       });
     }
@@ -2096,8 +2197,11 @@
     }
     text = prependSoulPrefix(text);
     if (onChunk) onChunk(text);
-    return Promise.resolve(text);
+    var tsv = extractTsvBlockForCopy(text);
+    return Promise.resolve({ text: text, tsv: tsv });
   };
+
+  LA.AI.extractTsvBlockForCopy = extractTsvBlockForCopy;
 
   LA.AI.selectFsbiPlan = selectFsbiPlan;
   LA.AI.classifyFields = classifyFields;

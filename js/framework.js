@@ -185,6 +185,9 @@
         if (skill.headerSignals) {
           result.headerSignals = skill.headerSignals;
         }
+        if (skill.riskDisclaimer != null) {
+          result.riskDisclaimer = skill.riskDisclaimer;
+        }
         return result;
       },
 
@@ -226,7 +229,7 @@
      * Central banking data manager — normalized in-memory objects for any agent.
      * Uses CSVLoader (if present) to build canonical Account objects:
      * { customerId, accountId, balance, openedAt, isPrimary, openDate,
-     *   maturityDate, term, typeCode, ownerCode, rate, raw }.
+     *   maturityDate, maturityAt, term, payment, paymentFrequency, typeCode, ownerCode, rate, raw }.
      */
     Data: {
       state: {
@@ -296,12 +299,20 @@
           var openStr = row.dateOpened || row.openDate || '';
           var openedAt = loader.inferDate ? loader.inferDate(openStr) : (openStr ? new Date(openStr) : null);
           var maturityStr = row.maturityDate || row.maturity || '';
+          var maturityAt = loader.inferDate ? loader.inferDate(maturityStr) : null;
+          if (maturityAt && isNaN(maturityAt.getTime())) maturityAt = null;
           var term = row.term != null ? row.term : (row.tenor != null ? row.tenor : null);
           var typeCode = row.typeCode || row.accountType || row.product || row.product_type || null;
           var ownerCode = row.ownerCode || row.owner || null;
           var rateNum = loader.inferNumeric ? loader.inferNumeric(row.rate) : parseFloat(row.rate);
           var rate = isNaN(rateNum) || rateNum == null ? 0 : rateNum;
           var isPrimary = loader.isPrimary ? loader.isPrimary(row) : !!row.primary;
+          var payRaw = row.payment != null ? row.payment : row.paymentAmount;
+          var payNum = loader.inferNumeric ? loader.inferNumeric(payRaw) : parseFloat(String(payRaw || '').replace(/[$,]/g, ''));
+          var payment = payRaw != null && payRaw !== '' && !isNaN(payNum) && isFinite(payNum) ? payNum : null;
+          var payFreq = row.paymentFrequency != null && String(row.paymentFrequency).trim() !== ''
+            ? String(row.paymentFrequency).trim()
+            : null;
 
           return {
             customerId: String(customerId || '').trim(),
@@ -311,7 +322,10 @@
             isPrimary: isPrimary,
             openDate: openStr || '',
             maturityDate: maturityStr || null,
+            maturityAt: maturityAt,
             term: term,
+            payment: payment,
+            paymentFrequency: payFreq,
             typeCode: typeCode,
             ownerCode: ownerCode,
             rate: rate,
@@ -466,6 +480,16 @@
       /** Get current normalized state (may be empty arrays). */
       getState: function () {
         return this.state;
+      },
+
+      /** Compact file list for agent results (name, type, row count). */
+      summarizeIngestedFiles: function (stateOpt) {
+        var s = stateOpt || this.state;
+        var files = s && s.meta && s.meta.files;
+        if (!Array.isArray(files)) return [];
+        return files.map(function (f) {
+          return { name: f.name, type: f.type, rows: f.rowCount };
+        });
       },
 
       /** Aggregate view per customer from normalized accounts. */
