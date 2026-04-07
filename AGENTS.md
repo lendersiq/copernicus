@@ -2,6 +2,8 @@
 
 This document is the **contract** for building agents so humans and tools can add new research agents consistently.
 
+**Step-by-step tutorial (Skills, tools, `queryContext`, load order):** [`js/agents/agentDev.md`](js/agents/agentDev.md).
+
 ## Architecture (mental model)
 
 | Layer | Role |
@@ -13,7 +15,7 @@ This document is the **contract** for building agents so humans and tools can ad
 | **`Copernicus.run(agent, inputs, researchContext)`** | Executes `run`; supports **sync or Promise** return values. |
 | **`CSVLoader`** | CSV **ingestion** → in-memory `byType[fileType]` rows; file types are strings like `'loans'`, `'mortgages'`. |
 
-Script **load order** (see `index.html`): `framework.js` → `skills/*.js` → `context/*.js` → `ai-engine.js` → tools → **agent scripts** → `app.js`.
+Script **load order** (see `index.html`): `framework.js` → `skills/*.js` → `context/*.js` → `ai-engine.js` → tools (e.g. `csv-loader.js`, `customer-directory.js`, `key-ring.js`, `fred-client.js`, `loan-spread.js`, …) → **agent scripts** → `app.js`.
 
 ## Agent specification (`spec`)
 
@@ -46,7 +48,7 @@ Copernicus.register(Copernicus.Agent({
 
 - **`summary`** (string): shown in the result panel headline.
 - **`needsData` / `missingTypes`**: opens the data modal; user ingests CSVs into memory.
-- **`queryContext`**: for **Ask** / insights — `rowsKey`, `skillId`, `entityLabel`, `idFields`, `fieldCatalog` (see `banking.query-context` and existing agents).
+- **`queryContext`**: for **Ask** / insights — `rowsKey`, `skillId`, `entityLabel`, `idFields`, optional `insightsPrimaryKey`. Prefer extending **`banking.query-context`** `fieldCatalog` in `skills/banking.js` instead of repeating large catalogs per agent; merge order is skill first, then agent overrides.
 - **Errors:** `{ error: '…' }` or thrown errors; framework wraps async failures.
 
 ### Async agents
@@ -59,7 +61,9 @@ Use **`return Promise.resolve(…)`** or **`return fetch(…).then(…)`** when 
 
 ### Treasury curve (interest-rate risk)
 
-**`js/tools/fred-client.js`** fetches the monthly curve only from **[BankersIQ trates](https://bankersiq.com/api/luci/trates/)** (vendor URL path `/api/luci/trates/`) with **`api_key`** (CORS-friendly JSON). The key is read from **`Copernicus.KeyRing`** (`KeyRingIds.BANKERSIQ_TRATES_API` → stored id `bankersiq_luci_api`). Override base URL (no query string): **`Copernicus.Fred.bankersIqTratesUrl`**.
+**`js/tools/fred-client.js`** fetches the monthly curve only from **[BankersIQ trates](https://bankersiq.com/api/luci/trates/)** (vendor URL path `/api/luci/trates/`) with **`api_key`** (CORS-friendly JSON). **`LA.tools.loadTreasuryCurveFromKeyRing()`** reads the key from **`Copernicus.KeyRing`** (`KeyRingIds.BANKERSIQ_TRATES_API` → stored id `bankersiq_luci_api`) and returns the same Promise as **`buildMonthlyTreasuryCurve`**. Override base URL (no query string): **`Copernicus.Fred.bankersIqTratesUrl`**.
+
+Loan spread rows are built in **`js/tools/loan-spread.js`** (`buildLoanTreasurySpreadRows`, `summarizeTreasuryCurveForResult`). Shared customer-directory lookups live in **`js/tools/customer-directory.js`**.
 
 If the BankersIQ key is missing, the loan agent returns **`needsBankersIqKey`**. There is **no** FRED or other Treasury fallback — **no** invented rates.
 
@@ -68,6 +72,7 @@ If the BankersIQ key is missing, the loan agent returns **`needsBankersIqKey`**.
 - Numeric policy → **`assumptions`** on a dedicated skill; read with `Copernicus.Skills.get('banking.my-skill').assumptions`.
 - Header alias lexicons → **`headerSignals`** (returned from `Skills.get` when registered on the skill).
 - Do **not** hardcode rates/thresholds in the agent if they belong in Skills.
+- **`riskDisclaimer`** (and similar copy) can live on the domain skill (e.g. **`banking.loan-profitability.riskDisclaimer`**) and be copied onto the result in `run()`.
 
 ### File types (CSV)
 
@@ -93,6 +98,6 @@ Use **`Copernicus.KeyRing`** (`js/tools/key-ring.js`): IndexedDB with localStora
 |------|--------|
 | `js/agents/checking-profitability.js` | Required multi-type (`checking` + `customers`), Skills, `queryContext`. |
 | `js/agents/share-of-wallet.js` | Multi required types, no external API. |
-| `js/agents/loan-profitability.js` | Required + **optional** type; **BankersIQ** trates + **KeyRing** `bankersiq_luci_api`; **`riskDisclaimer`**. |
+| `js/agents/loan-profitability.js` | Required + **optional** type; thin orchestration — **`loadTreasuryCurveFromKeyRing`**, **`buildLoanTreasurySpreadRows`**, **`summarizeIngestedFiles`**; **`riskDisclaimer`** on skill **`banking.loan-profitability`**. |
 | `js/agents/field-signal-test.js` | Audits **field → role** mappings per ingested file; `fieldSignalLexicon`, `fieldSignalReports`. |
 | `js/agents/market-vitality.js` | **No CSV** — UI: **ZIP, state, city** only. **FDIC SOD** (`js/tools/fdic-sod.js`); **`inferUsStateFromZip`** + **`js/data/zip5-to-state.js`** when state is blank. **FSBI**: one call `state` + `inflationAdjusted` (no period/subSector) → full ALL/ALL series per [BankersIQ](https://bankersiq.com/api/FSBI/); `js/tools/fsbi-client.js`; optional **`KeyRingIds.BANKERSIQ_TRATES_API`**. ZIP data: `scripts/build-zip5-state.py`. |

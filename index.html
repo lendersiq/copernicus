@@ -7,10 +7,6 @@
   <title>Copernicus — Local agents, local data</title>
   <!-- Embedded IDE browser previews may log "file: URLs are treated as unique security origins" — open in a normal tab or serve over http (e.g. npx serve) for a quiet console. -->
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
-  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
-  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <style>
     :root {
       --bg: #0f0f12;
@@ -187,6 +183,19 @@
     .ai-input::placeholder { color: var(--muted); }
     .ai-input:disabled { opacity: .5; }
     .ai-note { font-size: .75rem; color: var(--muted); margin-top: .5rem; }
+    .ai-query-response-text {
+      margin: 0; font-family: inherit; font-size: inherit; line-height: inherit;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .ai-tsv-toolbar {
+      display: flex; align-items: center; gap: .5rem; margin-top: .5rem; padding-top: .5rem;
+      border-top: 1px solid var(--border);
+    }
+    .ai-copy-tsv-btn {
+      display: inline-flex; align-items: center; gap: .4rem;
+      padding: .35rem .65rem; font-size: .8rem;
+    }
+    .ai-copy-tsv-btn svg { flex-shrink: 0; opacity: .9; }
   </style>
 </head>
 <body>
@@ -269,8 +278,10 @@
   <script src="js/ai-engine.js"></script>
   <script src="js/tools/profit-column-discovery.js"></script>
   <script src="js/tools/csv-loader.js"></script>
+  <script src="js/tools/customer-directory.js"></script>
   <script src="js/tools/key-ring.js"></script>
   <script src="js/tools/fred-client.js"></script>
+  <script src="js/tools/loan-spread.js"></script>
   <script src="js/tools/fdic-sod.js"></script>
   <script src="js/tools/fsbi-client.js"></script>
   <script src="js/agents/checking-profitability.js"></script>
