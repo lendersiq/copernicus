@@ -12,7 +12,7 @@
    * so customerId (relationship key, e.g. Portfolio) does not compete with note/account fields. */
   var FIELD_ROLES = [
     'customerId', 'balance', 'dateOpened', 'maturityDate',
-    'term', 'rate', 'typeCode', 'ownerCode',
+    'term', 'rate', 'payment', 'paymentFrequency', 'typeCode', 'ownerCode',
     'directDeposit', 'primary', 'income', 'customerName'
   ];
 
@@ -102,6 +102,15 @@
       'rate', 'interest_rate', 'int_rate', 'apy', 'apr', 'annual_rate',
       'coupon', 'yield', 'note_rate', 'current_rate', 'fixed_rate',
       'variable_rate', 'rate_pct', 'interest'
+    ],
+    payment: [
+      'payment', 'pmt', 'p_i', 'pi', 'monthly_payment', 'monthly payment',
+      'installment', 'regular_payment', 'scheduled_payment', 'loan_payment',
+      'payment_amount', 'p_and_i', 'principal_interest'
+    ],
+    paymentFrequency: [
+      'payment_frequency', 'payment freq', 'pay_frequency', 'pmt_frequency',
+      'pmt freq', 'installment_frequency', 'pay_freq', 'frequency'
     ],
     typeCode: [
       'type code', 'type_code', 'account_type', 'type', 'product', 'product_type', 'account type',
@@ -303,6 +312,8 @@
     term: [
       'term', 'tenor', 'duration', 'period', 'months', 'month', 'mth', 'mo', 'year', 'years', 'yrs'
     ],
+    payment: ['payment', 'installment', 'pmt', 'scheduled', 'principal and interest'],
+    paymentFrequency: ['frequency', 'pay freq', 'pmt freq', 'weekly', 'monthly'],
     typeCode: [
       /* Do not use bare "code" — every Owner_Code / Branch_Code would falsely score as product type. */
       'class', 'category', 'product', 'type', 'segment', 'subtype'
@@ -515,6 +526,8 @@
       scores.term = 0;
       scores.dateOpened = 0;
       scores.maturityDate = 0;
+      scores.payment = 0;
+      scores.paymentFrequency = 0;
       scores.typeCode = 0;
       scores.ownerCode = 0;
       scores.customerName = 0;
@@ -581,6 +594,20 @@
     if (mostlyInts && ptm >= t * 0.75) scores.term += 5;
     else if (ptm >= t * 0.65) scores.term += 3;
     if (stats.floatWithDecimal === 0 && ptm >= t * 0.5) scores.term += 2;
+
+    /* payment: currency-like amounts (often competes with balance — headers disambiguate) */
+    scores.payment = 0;
+    if (stats.numericCount >= t * 0.9) scores.payment += 2;
+    if (stats.hasCurrency > 0) scores.payment += 3;
+    if (stats.floatWithDecimal >= t * 0.4) scores.payment += 2;
+    if (stats.avgLen != null && stats.avgLen >= 2 && stats.avgLen <= 14 && stats.numericCount >= t * 0.85) scores.payment += 1;
+
+    /* paymentFrequency: short categorical tokens */
+    scores.paymentFrequency = 0;
+    if (stats.uniqueCount <= 36 && stats.numericCount < t * 0.55 && stats.dateCount < t * 0.35) {
+      scores.paymentFrequency += 4;
+    }
+    if (stats.shortLenRatio >= 0.65 && stats.uniqueCount <= 24) scores.paymentFrequency += 2;
 
     /* dateOpened / maturityDate: date patterns */
     scores.dateOpened = 0;

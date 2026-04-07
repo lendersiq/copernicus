@@ -110,9 +110,23 @@
     return curve.monthly[m - 1].treasuryAnnualPct;
   }
 
+  /**
+   * BankersIQ key from KeyRing (if configured) → monthly Treasury curve Promise.
+   * Rejects with Error message BANKERSIQ_TRATES_KEY_REQUIRED when no key.
+   */
+  function loadTreasuryCurveFromKeyRing() {
+    var kr = LA.KeyRing && typeof LA.KeyRing.get === 'function' && LA.KeyRingIds;
+    var pBiq = kr ? LA.KeyRing.get(LA.KeyRingIds.BANKERSIQ_TRATES_API) : Promise.resolve(null);
+    return pBiq.then(function (biqKey) {
+      var biq = biqKey && String(biqKey).trim() ? String(biqKey).trim() : null;
+      return buildMonthlyTreasuryCurve(biq);
+    });
+  }
+
   LA.tools = LA.tools || {};
   LA.tools.buildMonthlyTreasuryCurve = buildMonthlyTreasuryCurve;
   LA.tools.fetchBankersIqTreasuryCurve = fetchBankersIqCurve;
   LA.tools.treasuryYieldForTermMonths = treasuryYieldForTermMonths;
   LA.tools.annualRateToPercentPoints = annualRateToPercentPoints;
+  LA.tools.loadTreasuryCurveFromKeyRing = loadTreasuryCurveFromKeyRing;
 })(typeof window !== 'undefined' ? window : this);
