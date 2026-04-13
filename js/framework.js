@@ -321,6 +321,8 @@
           var rateNum = loader.inferNumeric ? loader.inferNumeric(row.rate) : parseFloat(row.rate);
           var rate = isNaN(rateNum) || rateNum == null ? 0 : rateNum;
           var isPrimary = loader.isPrimary ? loader.isPrimary(row) : !!row.primary;
+          var directDeposit = loader.hasDirectDeposit ? loader.hasDirectDeposit(row) : !!row.directDeposit;
+          var income = loader.getIncome ? loader.getIncome(row) : null;
           var payRaw = row.payment != null ? row.payment : row.paymentAmount;
           var payNum = loader.inferNumeric ? loader.inferNumeric(payRaw) : parseFloat(String(payRaw || '').replace(/[$,]/g, ''));
           var payment = payRaw != null && payRaw !== '' && !isNaN(payNum) && isFinite(payNum) ? payNum : null;
@@ -334,6 +336,8 @@
             balance: balance,
             openedAt: openedAt && !isNaN(openedAt.getTime()) ? openedAt : null,
             isPrimary: isPrimary,
+            directDeposit: directDeposit,
+            income: income,
             openDate: openStr || '',
             maturityDate: maturityStr || null,
             maturityAt: maturityAt,
