@@ -13,6 +13,7 @@ This folder holds **deployment-specific and human-facing context** for **Coperni
 |------|--------|
 | **`local-market.js`** | Registers skill **`local.market`** (`averageHouseholdIncome`, …). Values and rationale live in the **file header comments** — update when you change region or methodology. Loaded after **`skills/banking.js`** in **`index.html`**. |
 | **`soul.js`** | Defines **`Copernicus.Soul`**: preferences for **tone and addressing** in Explain / Ask. On **`file://`**, the app uses embedded **`DEFAULT_SOUL_MARKDOWN`** (no fetch). On **http(s)**, it may **`fetch('soul.md')`** from the site root if you add that file, otherwise it falls back to the embed. |
+| **`determinism.md`** | Technical note: **deterministic pipeline**, reproducibility, separation of **agent runs** vs **Ask**, and why variability from **live APIs** is not the same as hallucination or local randomness. |
 | *(optional `.md`)* | Runbooks, compliance notes, glossary of internal field names — **not executed** by the app; for people maintaining the deployment. |
 
 ---
@@ -29,4 +30,4 @@ If you serve the app over **HTTPS**, you can add a **`soul.md`** next to **`inde
 - **Shared banking assumptions & query context:** **`skills/banking.js`**
 - **CSV types and normalization:** **`js/tools/csv-loader.js`**, **`js/framework.js`**
 
-When you onboard someone new, point them here first for **what “context” means in this repo**, then to **`AGENTS.md`** for how agents and external data (e.g. Treasury curve) fit together.
+When you onboard someone new, point them here first for **what “context” means in this repo**, then to **`AGENTS.md`** for how agents and external data (e.g. Treasury curve) fit together. For **determinism vs. generative models and hallucination**, see **`determinism.md`**.

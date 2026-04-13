@@ -49,9 +49,25 @@
   function parseSoulPreferences(md) {
     var out = { address: null, tone: null, insightsStyle: null };
     if (!md || typeof md !== 'string') return out;
-    var m = md.match(/## How to refer to me\s*([\s\S]*?)(?=\n## |\n---\s*$)/i);
+
+    /*
+     * Match the "How to refer to me" section. Accept:
+     *   - Optional leading '#' characters + space before the heading (## or ###)
+     *   - Trailing whitespace and punctuation on the heading line
+     *   - Content up to the next ## heading, a horizontal rule (--- / ***), or end of string
+     */
+    var m = md.match(/^#{1,6}\s*How to refer to me\s*[^\n]*\n([\s\S]*?)(?=\n#{1,6}\s|\n[-*]{3,}|$)/im);
     var block = m ? m[1] : md;
-    var re = /Your preference:\s*([^\n]+)/gi;
+
+    /*
+     * Match "Your preference:" followed by optional formatting characters and the value.
+     * Handles variants like:
+     *   "Your preference: Jim"
+     *   "  — *Your preference:* Jim"
+     *   "*Your preference:*  Jim"
+     *   "Your preference :  Jim"
+     */
+    var re = /[*_]*Your\s+preference[*_]*\s*:?\s*[*_]*\s*([^\n]+)/gi;
     var match;
     var prefs = [];
     while ((match = re.exec(block)) !== null) {
