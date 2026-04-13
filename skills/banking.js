@@ -158,15 +158,19 @@
     sources: ['Banking data conventions']
   });
 
-  /* ── Profit column header signals (checking PMTD / DDA; stem-aware discovery) ── */
+  /* ── Profit column header signals (all account types; stem-aware discovery) ── */
 
   LA.Skills.register({
     id: 'banking.profit-column-signals',
     name: 'Profit column header signals',
     domain: 'banking',
     assumptions: {},
-    context: 'Header aliases for PMTD and DDA profitability columns on checking extracts. ' +
-      'Bundled as headerSignals.checkingProfitability; matched by js/tools/profit-column-discovery.js.',
+    context: 'Header aliases for profitability-specific columns across account types. ' +
+      'Each key under headerSignals is a product bundle (checkingProfitability, ' +
+      'savingsProfitability, cdProfitability, …). Agents call ' +
+      'CSVLoader.discoverColumnRoles(headers, skill.headerSignals.<bundle>) ' +
+      'for stem-aware role → column-index mapping; profit-column-discovery.js ' +
+      'is no longer a separate file.',
     sources: ['Core banking statement conventions', 'PMTD patterns'],
     headerSignals: {
       checkingProfitability: {
@@ -233,6 +237,61 @@
           'statement_average', 'cycle_average_balance', 'prior_avg_balance',
           'avg_ledger_balance', 'mean_daily_balance', 'mdb', 'adb',
           'average_book_balance', 'avg_book', 'collected_bal_avg'
+        ]
+      },
+
+      /**
+       * Savings account profitability columns.
+       * Extend when building the savings-profitability agent.
+       */
+      savingsProfitability: {
+        interestExpense: [
+          'interest_expense', 'interest_paid', 'interest_cost', 'dividend_paid',
+          'dividend_expense', 'interest_accrued', 'accrued_interest_expense',
+          'div_paid', 'int_expense', 'cost_of_funds', 'int_paid'
+        ],
+        serviceCharge: [
+          'service_charge', 'monthly_fee', 'maintenance_fee', 'account_fee',
+          'svc_charge', 'svc_chg', 'maint_fee', 'management_fee'
+        ],
+        serviceChargeWaived: [
+          'service_charge_waived', 'fee_waived', 'charge_waived', 'svc_charge_waived',
+          'waived_fee', 'fee_reversal', 'charge_reversal'
+        ],
+        avgBalance: [
+          'average_balance', 'avg_balance', 'avg_bal', 'average_daily_balance',
+          'adb', 'mean_daily_balance', 'collected_average', 'avg_collected_balance'
+        ],
+        numWithdrawals: [
+          'number_of_withdrawals', 'num_withdrawals', 'withdrawal_count',
+          'debit_count', 'num_debits', 'transaction_count', 'withdrawal_items'
+        ]
+      },
+
+      /**
+       * Certificate of deposit profitability columns.
+       * Extend when building the cd-profitability agent.
+       */
+      cdProfitability: {
+        interestExpense: [
+          'interest_expense', 'interest_paid', 'interest_cost', 'accrued_interest',
+          'int_expense', 'int_paid', 'dividend_paid', 'coupon_expense'
+        ],
+        penaltyRevenue: [
+          'early_withdrawal_penalty', 'penalty', 'penalty_revenue', 'ewp',
+          'early_redemption_fee', 'break_fee', 'early_termination_fee'
+        ],
+        maturityDate: [
+          'maturity_date', 'maturity', 'maturity_dt', 'cd_maturity',
+          'due_date', 'expiry_date', 'term_end_date', 'renewal_date'
+        ],
+        avgBalance: [
+          'average_balance', 'avg_balance', 'avg_bal', 'face_amount',
+          'principal_balance', 'deposit_amount', 'cd_balance'
+        ],
+        autoRenew: [
+          'auto_renew', 'auto_renewal', 'automatic_renewal', 'renew',
+          'rollover', 'auto_rollover', 'renewal_flag'
         ]
       }
     }
