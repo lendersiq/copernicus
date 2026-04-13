@@ -283,13 +283,76 @@
     id: 'banking.market-vitality',
     name: 'Market vitality',
     domain: 'banking',
-    assumptions: {},
+    assumptions: {
+      /** Years used for the FDIC + FSBI deposit-window narrative (default 7). */
+      insightWindowYears: 7,
+      /**
+       * selectFsbiPlan: when latest SOD YoY deposit growth (%) meets or exceeds this
+       * threshold the inflation-adjusted FSBI series is requested (default 6).
+       */
+      fsbiInflationAdjustedYoyThreshold: 6,
+
+      /**
+       * Census ACS 5-year vintage to request via the BankersIQ proxy.
+       * Update when a new ACS 5-year release is available (typically each December).
+       */
+      censusAcsYear: '2023',
+
+      /**
+       * National benchmarks used by the AI engine to contextualise CBSA profile signals.
+       * Source: U.S. Census Bureau ACS 5-year 2023 national estimates.
+       * Update alongside censusAcsYear.
+       */
+      nationalMedianHouseholdIncome: 74580,
+      nationalMedianHomeValue: 303400,
+
+      /** Unemployment rate thresholds (%) for LOW / MODERATE / HIGH signal labels. */
+      unemploymentRateLowThreshold: 4.5,
+      unemploymentRateHighThreshold: 7.0,
+
+      /**
+       * Rubric thresholds used by marketVitalitySynthesis to score each dimension 0–10.
+       *
+       * Deposit window (multi-year, June-30):
+       *   >= depositWindowStrongPct  → 3 pts   (e.g. +50% over the insight window)
+       *   >= depositWindowModeratePct → 2 pts  (e.g. +15%)
+       *   > 0                         → 1 pt
+       *   <= 0                        → 0 pts
+       *
+       * Deposit YoY:
+       *   >= depositYoyStrongPct → 2 pts       (e.g. +8% latest June-30 vs prior)
+       *   > 0                    → 1 pt
+       *   <= 0                   → 0 pts
+       *
+       * CBSA income vs national: STRONG/ABOVE_AVERAGE → 2 pts, NEAR → 1 pt, BELOW → 0 pts
+       * CBSA unemployment: LOW → 1 pt, MODERATE → 0 pts, HIGH → -1 pt
+       * FSBI window: > 0 → 1 pt, <= 0 → 0 pts   (statewide proxy; max 1 pt)
+       * FSBI YoY:    > 0 → 1 pt, <= 0 → 0 pts
+       *
+       * Verdict bands (out of 10 max):
+       *   >= vitalityScoreStrong    → STRONG
+       *   >= vitalityScoreModStrong → MODERATELY STRONG
+       *   >= vitalityScoreMixed     → MIXED
+       *   otherwise                 → CAUTIONARY
+       */
+      depositWindowStrongPct: 50,
+      depositWindowModeratePct: 15,
+      depositYoyStrongPct: 8,
+      vitalityScoreStrong: 8,
+      vitalityScoreModStrong: 6,
+      vitalityScoreMixed: 4
+    },
     context: 'Aggregates FDIC Summary of Deposits by filing year for a ZIP (ZIPBR only, no STALP on ZIP) or city+state (CITYBR, STALP); DEPSUMBR in $ thousands. ' +
+      'ZIP mode: CBSA code from Census 2010 ZCTA5–CBSA relationship (ZipCbsaData); metro/micro NAME from static CbsaNameData (`js/data/cbsa-code-to-name.js`, built by scripts/build-zip5-cbsa.py from ACS 5-year — no browser Census API). City+state without ZIP does not attach CBSA. ' +
       'FSBI: one BankersIQ GET with state (+ inflationAdjusted); vendor returns the full statewide monthly series (ALL/ALL). selectFsbiPlan chooses nominal vs inflation-adjusted. State from user or ZIP lookup (ZipStateData). Optional api_key from KeyRing if saved on loan panel. ' +
       'FSBI is usually state-level.',
     sources: [
       'FDIC BankFind Suite — Summary of Deposits',
       'https://api.fdic.gov/banks/sod',
+      'U.S. Census Bureau — ZCTA5–CBSA relationship file (2010)',
+      'https://www2.census.gov/geo/docs/maps-data/data/rel/zcta_cbsa_rel_10.txt',
+      'U.S. Census Bureau — ACS 5-year (NAME list, build-time via API)',
+      'https://api.census.gov/',
       'BankersIQ — Fiserv Small Business Index',
       'https://bankersiq.com/api/FSBI/'
     ]
