@@ -647,6 +647,7 @@
       if (sq.entityPlural) out.entityPlural = sq.entityPlural;
       if (sq.idFields && sq.idFields.length) out.idFields = sq.idFields.slice();
       if (sq.unprofitableMetricKey) out.unprofitableMetricKey = sq.unprofitableMetricKey;
+      if (sq.insightsPrimaryKey) out.insightsPrimaryKey = sq.insightsPrimaryKey;
     }
     if (result && result.queryContext) {
       var qc = result.queryContext;
@@ -1632,27 +1633,53 @@
     return (n * sumXY - sumX * sumY) / denom;
   }
 
-  /** Balance-like X vs outcome Y for insight correlation; never X === Y. */
-  /** Align SOD narrative and FSBI comparison window (training: short-to-midterm ~7 years). */
-  var MV_WINDOW_YEARS = 7;
-  var MV_WINDOW_MONTHS = MV_WINDOW_YEARS * 12;
+  /** Read banking.market-vitality assumptions; return defaults when skill is absent. */
+  function getMvAssumptions() {
+    var sk = LA.Skills && LA.Skills.get ? LA.Skills.get('banking.market-vitality') : null;
+    var a = sk && sk.assumptions ? sk.assumptions : {};
+    function num(key, def) {
+      return (a[key] != null && isFinite(a[key])) ? Number(a[key]) : def;
+    }
+    return {
+      insightWindowYears:                  num('insightWindowYears', 7),
+      fsbiInflationAdjustedYoyThreshold:   num('fsbiInflationAdjustedYoyThreshold', 6),
+      nationalMedianHouseholdIncome:       num('nationalMedianHouseholdIncome', 74580),
+      nationalMedianHomeValue:             num('nationalMedianHomeValue', 303400),
+      unemploymentRateLowThreshold:        num('unemploymentRateLowThreshold', 4.5),
+      unemploymentRateHighThreshold:       num('unemploymentRateHighThreshold', 7.0),
+      censusAcsYear:                       (a.censusAcsYear && String(a.censusAcsYear).trim()) ? String(a.censusAcsYear).trim() : '2023',
+      /* rubric thresholds */
+      depositWindowStrongPct:              num('depositWindowStrongPct', 50),
+      depositWindowModeratePct:            num('depositWindowModeratePct', 15),
+      depositYoyStrongPct:                 num('depositYoyStrongPct', 8),
+      vitalityScoreStrong:                 num('vitalityScoreStrong', 8),
+      vitalityScoreModStrong:              num('vitalityScoreModStrong', 6),
+      vitalityScoreMixed:                  num('vitalityScoreMixed', 4)
+    };
+  }
+
+  /** Resolved at call-time from Skills so operator overrides take effect immediately. */
+  function getMvWindowYears() { return getMvAssumptions().insightWindowYears; }
 
   /**
    * FSBI statewide series: BankersIQ returns all months in one response when only state (+ inflation) is sent
    * (e.g. inflationAdjusted=0&state=VT). Engine only chooses nominal vs inflation-adjusted; optional nudge from deposits.
+   * Threshold read from banking.market-vitality.assumptions.fsbiInflationAdjustedYoyThreshold (default 6%).
    */
   function selectFsbiPlan(geo, depositTrend) {
+    var threshold = getMvAssumptions().fsbiInflationAdjustedYoyThreshold;
     var inflationAdjusted = false;
+    var rationale = '';
     if (Array.isArray(depositTrend) && depositTrend.length >= 2) {
       var latest = depositTrend[depositTrend.length - 1];
-      if (latest && latest.yoyPct != null && latest.yoyPct >= 6) {
+      if (latest && latest.yoyPct != null && latest.yoyPct >= threshold) {
         inflationAdjusted = true;
+        rationale = 'Latest SOD YoY ' + latest.yoyPct + '% ≥ threshold ' + threshold + '% → inflation-adjusted';
+      } else if (latest && latest.yoyPct != null) {
+        rationale = 'Latest SOD YoY ' + latest.yoyPct + '% < threshold ' + threshold + '% → nominal';
       }
     }
-    return {
-      inflationAdjusted: inflationAdjusted,
-      rationale: ''
-    };
+    return { inflationAdjusted: inflationAdjusted, rationale: rationale };
   }
 
   function fsbiSliceLastMonths(sortedSeries, n) {
@@ -1664,6 +1691,96 @@
   function fsbiIndexPctChange(oldV, newV) {
     if (oldV == null || newV == null || !isFinite(oldV) || oldV === 0) return null;
     return Math.round(((newV - oldV) / oldV) * 10000) / 100;
+  }
+
+  /**
+   * Census ACS CBSA profile — demographic and economic context for a metro/micro area.
+   * Reads national benchmarks from banking.market-vitality.assumptions.
+   */
+  function cbsaInsightLines(result) {
+    var cbsa = result && result.cbsa;
+    if (!cbsa || cbsa.skipped) return [];
+    var profile = cbsa.profile;
+    if (!profile || profile.skipped || profile.error) return [];
+
+    var a = getMvAssumptions();
+    var natIncome  = a.nationalMedianHouseholdIncome || 74580;
+    var natHome    = a.nationalMedianHomeValue       || 303400;
+    var uLow       = a.unemploymentRateLowThreshold  || 4.5;
+    var uHigh      = a.unemploymentRateHighThreshold || 7.0;
+
+    var lines = [];
+    var areaLabel = (cbsa.name || ('CBSA ' + cbsa.code));
+
+    /* ── Population ──────────────────────────────────────────── */
+    if (profile.population != null) {
+      lines.push({
+        priority: 8,
+        text: 'CBSA ' + cbsa.code + ' (' + areaLabel + '): population ' +
+          profile.population.toLocaleString() + ' (ACS ' + (profile.acsYear || '') + ' 5-year estimate).'
+      });
+    }
+
+    /* ── Median household income vs national ─────────────────── */
+    if (profile.medianHouseholdIncome != null) {
+      var incDiff = Math.round(((profile.medianHouseholdIncome - natIncome) / natIncome) * 1000) / 10;
+      var incDir  = incDiff >= 0 ? 'above' : 'below';
+      var incSig  = Math.abs(incDiff) >= 10 ? (incDiff >= 0 ? 'STRONG' : 'WEAK')
+                  : Math.abs(incDiff) >= 4  ? (incDiff >= 0 ? 'ABOVE AVERAGE' : 'BELOW AVERAGE')
+                  : 'NEAR NATIONAL AVERAGE';
+      lines.push({
+        priority: 8,
+        text: 'Median household income: $' + profile.medianHouseholdIncome.toLocaleString() +
+          ' — ' + Math.abs(incDiff) + '% ' + incDir + ' the national median ($' +
+          natIncome.toLocaleString() + '). Signal: ' + incSig + '.'
+      });
+    }
+
+    /* ── Unemployment rate ───────────────────────────────────── */
+    if (profile.unemploymentRate != null) {
+      var uRate = profile.unemploymentRate;
+      var uSig  = uRate < uLow  ? 'LOW — labor market tight'
+                : uRate > uHigh ? 'HIGH — elevated stress'
+                : 'MODERATE';
+      lines.push({
+        priority: 8,
+        text: 'Unemployment rate: ' + uRate.toFixed(1) + '% (' +
+          (profile.unemployed != null ? profile.unemployed.toLocaleString() + ' of ' : '') +
+          (profile.laborForce != null ? profile.laborForce.toLocaleString() + ' civilian labor force' : 'labor force unknown') +
+          '). Signal: ' + uSig + '.'
+      });
+    }
+
+    /* ── Median home value vs national ───────────────────────── */
+    if (profile.medianHomeValue != null) {
+      var hvDiff = Math.round(((profile.medianHomeValue - natHome) / natHome) * 1000) / 10;
+      var hvDir  = hvDiff >= 0 ? 'above' : 'below';
+      lines.push({
+        priority: 8,
+        text: 'Median home value: $' + profile.medianHomeValue.toLocaleString() +
+          ' — ' + Math.abs(hvDiff) + '% ' + hvDir + ' national median ($' +
+          natHome.toLocaleString() + ').'
+      });
+    }
+
+    return lines;
+  }
+
+  /**
+   * Format an FSBI period string (YYYYMMDD or YYYYMM) as "Month YYYY" (e.g. "March 2026").
+   * Falls back to the raw string if it cannot be parsed.
+   */
+  var MONTH_NAMES = ['January','February','March','April','May','June',
+                     'July','August','September','October','November','December'];
+  function formatFsbiPeriod(period) {
+    if (!period) return String(period || '');
+    var s = String(period).replace(/\D/g, '');
+    if (s.length >= 6) {
+      var y = parseInt(s.slice(0, 4), 10);
+      var m = parseInt(s.slice(4, 6), 10);
+      if (!isNaN(y) && m >= 1 && m <= 12) return MONTH_NAMES[m - 1] + ' ' + y;
+    }
+    return String(period);
   }
 
   /**
@@ -1691,7 +1808,8 @@
           return String(a.period || '').localeCompare(String(b.period || ''));
         }));
     if (series.length) {
-      var win = fsbiSliceLastMonths(series, MV_WINDOW_MONTHS);
+      var mvYears = getMvWindowYears();
+      var win = fsbiSliceLastMonths(series, mvYears * 12);
       var oldest = win.length ? win[0] : series[0];
       var newest = win.length ? win[win.length - 1] : series[series.length - 1];
       var sub = newest.subSectorName || 'series';
@@ -1704,8 +1822,8 @@
       lines.push({
         priority: 8,
         text: 'Fiserv Small Business Index (FSBI): ' + sub + (g ? ' — ' + g : '') +
-          ', last ' + win.length + ' month(s) (' + oldest.period + ' to ' + newest.period +
-          ', aligned with a ~' + MV_WINDOW_YEARS + '-year deposit window) (' + adjLabel + '). ' +
+          ', last ' + win.length + ' month(s) (' + formatFsbiPeriod(oldest.period) + ' to ' + formatFsbiPeriod(newest.period) +
+          ', aligned with a ~' + mvYears + '-year deposit window) (' + adjLabel + '). ' +
           'Latest: ' + fsbiYoyLine(newest) + '.'
       });
       var s0 = oldest.salesIndexSa;
@@ -1731,7 +1849,7 @@
           priority: 7,
           text: indexKind + ' Sales Index (SA) latest year-over-year change: ' +
             (yoyS != null ? (yoyS >= 0 ? '+' : '') + yoyS + '%' : 'n/a') +
-            (pctS != null ? '; cumulative change over those ~' + MV_WINDOW_YEARS + ' years: ' + (pctS >= 0 ? '+' : '') + pctS + '%' : '') +
+            (pctS != null ? '; cumulative change over those ~' + mvYears + ' years: ' + (pctS >= 0 ? '+' : '') + pctS + '%' : '') +
             '. Transactional index (SA) YoY: ' + (yoyT != null ? (yoyT >= 0 ? '+' : '') + yoyT + '%' : 'n/a') +
             (pctT != null ? '; cumulative over the window: ' + (pctT >= 0 ? '+' : '') + pctT + '%' : '') +
             '.' + pace
@@ -1766,12 +1884,14 @@
   }
 
   /**
-   * Closing line: lead with ~MV_WINDOW_YEARS deposit + FSBI window; YoY as near-term momentum (may diverge).
+   * Closing line: lead with insight-window deposit + FSBI window; YoY as near-term momentum.
+   * Window length from banking.market-vitality.assumptions.insightWindowYears (default 7).
    */
   function marketVitalitySynthesis(result) {
     if (!result) return null;
     var trend = result.depositTrend;
     var fsbi = result.fsbi;
+    var cbsa = result.cbsa;
     if (!Array.isArray(trend) || trend.length < 2 || !fsbi || fsbi.skipped) return null;
     var tool = LA.tools && LA.tools.fsbi;
     var series = (fsbi.series && fsbi.series.length)
@@ -1781,9 +1901,10 @@
         : []);
     if (!series.length) return null;
 
+    var mvYears = getMvWindowYears();
     var latest = trend[trend.length - 1];
     var yEndCal = latest.year;
-    var yStartCal = yEndCal - (MV_WINDOW_YEARS - 1);
+    var yStartCal = yEndCal - (mvYears - 1);
     var trendWin = [];
     for (var wi = 0; wi < trend.length; wi++) {
       var yyr = trend[wi].year;
@@ -1796,7 +1917,7 @@
       ? ((latestW.depositsThousands - firstW.depositsThousands) / firstW.depositsThousands) * 100
       : null;
 
-    var winM = fsbiSliceLastMonths(series, MV_WINDOW_MONTHS);
+    var winM = fsbiSliceLastMonths(series, mvYears * 12);
     var oldestM = winM.length ? winM[0] : series[0];
     var newestM = winM.length ? winM[winM.length - 1] : series[series.length - 1];
     var pctS = fsbiIndexPctChange(oldestM.salesIndexSa, newestM.salesIndexSa);
@@ -1814,53 +1935,177 @@
     var nearFsbi = fsbiYoy == null ? 'n/a' : (Math.round(fsbiYoy * 100) / 100 + '% YoY');
     if (fsbiYoy != null) nearFsbi = (fsbiYoy >= 0 ? '+' : '') + nearFsbi;
 
-    var agreeMid = depWindowPct != null && pctS != null &&
-      (depWindowPct >= 0) === (pctS >= 0) && Math.abs(depWindowPct) > 0.5 && Math.abs(pctS) > 0.5;
-    var agreeNear = depYoy != null && fsbiYoy != null && (depYoy >= 0) === (fsbiYoy >= 0);
-    var depCross = depWindowPct != null && depYoy != null && (depWindowPct >= 0) !== (depYoy >= 0);
-    var fsbiCross = pctS != null && fsbiYoy != null && (pctS >= 0) !== (fsbiYoy >= 0);
+    /* ── Rubric scoring (0–10 points) ──────────────────────────
+     *
+     * Dimension              Max   Weight rationale
+     * ─────────────────────  ───   ──────────────────────────────
+     * Deposit window (local)   3   Highest: direct, FDIC-sourced
+     * Deposit YoY              2   Local near-term pulse
+     * CBSA income signal       2   Structural purchasing power
+     * CBSA unemployment        1   Labor-market health
+     * FSBI window              1   Statewide proxy — capped at 1
+     * FSBI YoY                 1   Statewide near-term proxy
+     * ─────────────────────  ───
+     * Total                   10
+     *
+     * Thresholds from banking.market-vitality.assumptions (skills/banking.js).
+     * ─────────────────────────────────────────────────────────── */
+    var ra = getMvAssumptions();
+    var depWinStrong   = ra.depositWindowStrongPct;
+    var depWinMod      = ra.depositWindowModeratePct;
+    var depYoyStrong   = ra.depositYoyStrongPct;
+    var natInc         = ra.nationalMedianHouseholdIncome;
+    var uLow           = ra.unemploymentRateLowThreshold;
+    var uHigh          = ra.unemploymentRateHighThreshold;
+    var scoreStrong    = ra.vitalityScoreStrong;
+    var scoreMod       = ra.vitalityScoreModStrong;
+    var scoreMixed     = ra.vitalityScoreMixed;
 
-    var tail = '';
-    if (depCross) {
-      tail += ' Deposits: multi-year change and latest YoY differ in sign—YoY is the short pulse on top of the wider June-30 arc. ';
+    /* Dimension 1 — deposit multi-year window (0–3) */
+    var dWinPts = 0;
+    if (depWindowPct != null) {
+      if (depWindowPct >= depWinStrong)  dWinPts = 3;
+      else if (depWindowPct >= depWinMod) dWinPts = 2;
+      else if (depWindowPct > 0)          dWinPts = 1;
     }
-    if (fsbiCross) {
-      tail += ' FSBI: cumulative index move over the monthly window and latest sales YoY differ in sign—same interpretation. ';
+
+    /* Dimension 2 — deposit YoY (0–2) */
+    var dYoyPts = 0;
+    if (depYoy != null) {
+      if (depYoy >= depYoyStrong) dYoyPts = 2;
+      else if (depYoy > 0)        dYoyPts = 1;
     }
-    if (!depCross && !fsbiCross) {
-      if (agreeMid && agreeNear) {
-        tail += ' Multi-year and YoY signs line up across deposits and FSBI sales. ';
-      } else if (agreeMid) {
-        tail += ' Multi-year deposit and FSBI index moves agree in direction; latest YoY differs between the two series. ';
-      } else if (agreeNear) {
-        tail += ' Latest YoY agrees across series; multi-year deposit vs FSBI index changes are mixed. ';
-      } else {
-        tail += ' Read multi-year window first, then YoY for the most recent beat. ';
+
+    /* Dimensions 3 & 4 — CBSA fundamentals (income 0–2, unemployment 0–1) */
+    var cbsaIncPts = 0, cbsaUPts = 0, hasCbsaProfile = false;
+    var cbsaProfile = cbsa && !cbsa.skipped && cbsa.profile && !cbsa.profile.skipped && !cbsa.profile.error
+      ? cbsa.profile : null;
+    if (cbsaProfile) {
+      hasCbsaProfile = true;
+      if (cbsaProfile.medianHouseholdIncome != null) {
+        var incPct = ((cbsaProfile.medianHouseholdIncome - natInc) / natInc) * 100;
+        if (incPct >= 10)      cbsaIncPts = 2;
+        else if (incPct >= 4)  cbsaIncPts = 2;   /* above-average also earns full 2 */
+        else if (incPct >= -4) cbsaIncPts = 1;
+        /* below -4%: 0 pts */
+      }
+      if (cbsaProfile.unemploymentRate != null) {
+        if (cbsaProfile.unemploymentRate < uLow)       cbsaUPts = 1;
+        else if (cbsaProfile.unemploymentRate > uHigh) cbsaUPts = -1;
+        /* moderate: 0 */
       }
     }
 
-    var scope = ' Directional only—not a full census of the trade area.';
-    var conclusion;
-    if (depCross && fsbiCross) {
-      conclusion = ' Conclusion: On this census (branch deposits for the geography and statewide FSBI sales), vitality reads strong over the ~' + MV_WINDOW_YEARS + '-year window with near-term softness in both lines—lead with the window; YoY marks the latest pulse.';
-    } else if (depCross) {
-      conclusion = ' Conclusion: Deposits built over the window but the latest June-30 year is weaker YoY; FSBI does not show the same window-versus-YoY split—vitality is mixed, with local deposit timing flagging nearer-term pressure.';
-    } else if (fsbiCross) {
-      conclusion = ' Conclusion: FSBI gained over the window but latest sales YoY is soft; deposits do not show that same split—statewide small-business momentum cools in the latest beat relative to the multi-year arc.';
-    } else if (agreeMid && agreeNear) {
-      conclusion = ' Conclusion: Deposits and FSBI agree on multi-year and latest-year direction—this census paints a consistent vitality read.';
-    } else if (agreeMid) {
-      conclusion = ' Conclusion: Multi-year deposit and FSBI moves agree; latest YoY differs between series—vitality is favorable on the window with a split near-term picture.';
-    } else if (agreeNear) {
-      conclusion = ' Conclusion: Latest YoY aligns across series while multi-year deposit vs FSBI index changes diverge—near-term momentum matches more cleanly than the full-window story.';
-    } else {
-      conclusion = ' Conclusion: Horizon signals do not line up cleanly across both census lines—weigh the ~' + MV_WINDOW_YEARS + '-year FDIC and FSBI window first, then YoY, before a firm vitality call.';
+    /* Dimensions 5 & 6 — FSBI window and YoY (0–1 each) */
+    var fsbiWinPts = (pctS  != null && pctS  > 0) ? 1 : 0;
+    var fsbiYoyPts = (fsbiYoy != null && fsbiYoy > 0) ? 1 : 0;
+
+    var totalScore = dWinPts + dYoyPts + cbsaIncPts + cbsaUPts + fsbiWinPts + fsbiYoyPts;
+
+    /* Verdict label */
+    var verdict;
+    if      (totalScore >= scoreStrong) verdict = 'STRONG';
+    else if (totalScore >= scoreMod)    verdict = 'MODERATELY STRONG';
+    else if (totalScore >= scoreMixed)  verdict = 'MIXED';
+    else                                 verdict = 'CAUTIONARY';
+
+    /* Near-term caveats */
+    var nearTermNotes = [];
+    if (depYoy != null && depYoy < 0)   nearTermNotes.push('deposit YoY is negative');
+    if (fsbiYoy != null && fsbiYoy < 0) nearTermNotes.push('statewide FSBI sales YoY is soft');
+    var depCross = depWindowPct != null && depYoy != null && (depWindowPct >= 0) !== (depYoy >= 0);
+    if (depCross && depYoy != null && depYoy >= 0) nearTermNotes.push('deposit YoY has rebounded after a weaker window');
+    var fsbiCross = pctS != null && fsbiYoy != null && (pctS >= 0) !== (fsbiYoy >= 0);
+    if (fsbiCross && fsbiYoy != null && fsbiYoy >= 0) nearTermNotes.push('FSBI YoY has firmed after a weaker window');
+
+    /* Score detail string for transparency */
+    var scoreDetail = '(' + totalScore + '/10: deposits window ' + dWinPts + '/3' +
+      ', YoY ' + dYoyPts + '/2' +
+      (hasCbsaProfile ? ', CBSA income ' + cbsaIncPts + '/2 + unemployment ' + cbsaUPts + '/1' : ', CBSA n/a') +
+      ', FSBI window ' + fsbiWinPts + '/1 + YoY ' + fsbiYoyPts + '/1)';
+
+    /* FSBI statewide caveat */
+    var fsbiScope = (fsbi.meta && fsbi.meta.inflationAdjusted === true)
+      ? 'inflation-adjusted statewide FSBI'
+      : 'nominal statewide FSBI';
+
+    var conclusionParts = ['Vitality verdict: ' + verdict + ' ' + scoreDetail + '.'];
+
+    /* Lead with the strongest signals */
+    if (dWinPts === 3) {
+      conclusionParts.push('Multi-year deposit growth of ' + midDep + ' over the ' + mvYears + '-year window is the primary STRONG signal.');
+    } else if (dWinPts === 2) {
+      conclusionParts.push('Moderate deposit growth of ' + midDep + ' over the ' + mvYears + '-year window supports a positive read.');
+    } else if (dWinPts <= 1 && depWindowPct != null && depWindowPct < 0) {
+      conclusionParts.push('Deposit contraction of ' + midDep + ' over the window is the primary drag on this score.');
     }
 
-    return 'Vitality summary (weight the ~' + MV_WINDOW_YEARS + '-year window first): FDIC summed deposits for this geography changed about ' +
+    if (hasCbsaProfile && (cbsaIncPts + cbsaUPts) >= 2) {
+      conclusionParts.push('CBSA fundamentals reinforce the read: above-average household income and a tight labor market.');
+    } else if (hasCbsaProfile && (cbsaIncPts + cbsaUPts) <= 0) {
+      conclusionParts.push('CBSA fundamentals are a drag: income is near or below the national median or unemployment is elevated.');
+    }
+
+    if (nearTermNotes.length) {
+      conclusionParts.push('Near-term caveat: ' + nearTermNotes.join('; ') + ' — weight the window; YoY marks the latest pulse.');
+    }
+
+    if (fsbiYoyPts === 0 && fsbiWinPts > 0) {
+      conclusionParts.push(fsbiScope + ' gained over the window but latest YoY is soft — near-term statewide small-business momentum cools.');
+    } else if (fsbiYoyPts > 0 && fsbiWinPts === 0) {
+      conclusionParts.push(fsbiScope + ' shows a positive latest YoY beat despite a weaker cumulative window.');
+    }
+
+    conclusionParts.push('Directional only—not a full census of the trade area.');
+
+    var conclusion = ' ' + conclusionParts.join(' ');
+
+    /* ── CBSA summary block ─────────────────────────────────── */
+    var cbsaSummary = '';
+    if (cbsa && cbsa.name) {
+      var profile = cbsa.profile;
+      var cbsaParts = [];
+      if (profile && !profile.skipped && !profile.error) {
+        var a = getMvAssumptions();
+        var natInc = a.nationalMedianHouseholdIncome || 74580;
+        var uLow2  = a.unemploymentRateLowThreshold  || 4.5;
+        var uHigh2 = a.unemploymentRateHighThreshold || 7.0;
+        if (profile.population != null) {
+          cbsaParts.push('population ' + profile.population.toLocaleString());
+        }
+        if (profile.medianHouseholdIncome != null) {
+          var incDiff2 = Math.round(((profile.medianHouseholdIncome - natInc) / natInc) * 1000) / 10;
+          var incSig2  = Math.abs(incDiff2) >= 10 ? (incDiff2 >= 0 ? 'STRONG' : 'WEAK')
+                       : Math.abs(incDiff2) >= 4  ? (incDiff2 >= 0 ? 'ABOVE AVERAGE' : 'BELOW AVERAGE')
+                       : 'NEAR NATIONAL AVERAGE';
+          cbsaParts.push('median HH income $' + profile.medianHouseholdIncome.toLocaleString() +
+            ' (' + incSig2 + ')');
+        }
+        if (profile.unemploymentRate != null) {
+          var uSig2 = profile.unemploymentRate < uLow2  ? 'LOW'
+                    : profile.unemploymentRate > uHigh2 ? 'HIGH'
+                    : 'MODERATE';
+          cbsaParts.push('unemployment ' + profile.unemploymentRate + '% (' + uSig2 + ')');
+        }
+        if (profile.medianHomeValue != null) {
+          var a2 = getMvAssumptions();
+          var natHome2 = a2.nationalMedianHomeValue || 303400;
+          var hvDiff2  = Math.round(((profile.medianHomeValue - natHome2) / natHome2) * 1000) / 10;
+          var hvDir2   = hvDiff2 >= 0 ? 'above' : 'below';
+          cbsaParts.push('median home value $' + profile.medianHomeValue.toLocaleString() +
+            ' (' + Math.abs(hvDiff2) + '% ' + hvDir2 + ' national)');
+        }
+      }
+      cbsaSummary = ' CBSA: ' + cbsa.name +
+        (cbsaParts.length ? ' — ' + cbsaParts.join('; ') : '') + '.';
+    }
+
+    return 'Vitality summary (weight the ~' + mvYears + '-year window first): FDIC summed deposits for this geography changed about ' +
       midDep + ' from ' + firstW.year + ' to ' + latestW.year + ' (June 30 filings in range). ' +
-      'FSBI statewide sales index (SA) changed about ' + midFsbi + ' over ~' + winM.length + ' month(s) through ' + newestM.period + '. ' +
-      'Near term (latest vs prior year / month): deposits ' + nearDep + '; FSBI sales ' + nearFsbi + '.' + tail + scope + conclusion;
+      'FSBI statewide sales index (SA) changed about ' + midFsbi + ' over ~' + winM.length + ' month(s) through ' + formatFsbiPeriod(newestM.period) + '.' +
+      cbsaSummary +
+      ' Near term (latest vs prior year / month): deposits ' + nearDep + '; FSBI sales ' + nearFsbi + '.' +
+      conclusion;
   }
 
   function generateMarketVitalityInsights(result) {
@@ -1868,8 +2113,9 @@
     var geo = result && result.geo;
     var hasTrend = Array.isArray(trend) && trend.length > 0 && geo;
     var fsbiLines = fsbiInsightLines(result && result.fsbi, geo && geo.label);
+    var cbsaLines = cbsaInsightLines(result);
 
-    if (!hasTrend && !fsbiLines.length) return null;
+    if (!hasTrend && !fsbiLines.length && !cbsaLines.length) return null;
 
     var insights = [];
     var label = (geo && geo.label) || 'Selected market';
@@ -1881,17 +2127,18 @@
     }
 
     if (hasTrend) {
+      var mvW = getMvWindowYears();
       var latest = trend[trend.length - 1];
       var first = trend[0];
       var yEndCal = latest.year;
-      var yStartCal = yEndCal - (MV_WINDOW_YEARS - 1);
+      var yStartCal = yEndCal - (mvW - 1);
       var trendWin = [];
       for (var tw = 0; tw < trend.length; tw++) {
         var yy = trend[tw].year;
         if (yy >= yStartCal && yy <= yEndCal) trendWin.push(trend[tw]);
       }
       if (!trendWin.length) {
-        trendWin = trend.slice(Math.max(0, trend.length - MV_WINDOW_YEARS));
+        trendWin = trend.slice(Math.max(0, trend.length - mvW));
       }
       var firstW = trendWin[0];
       var latestW = trendWin[trendWin.length - 1];
@@ -1906,8 +2153,8 @@
 
       insights.push({
         priority: 10,
-        text: 'Market vitality (FDIC Summary of Deposits): ' + label + '. Short-to-midterm focus: calendar years ' +
-          yStartCal + '–' + yEndCal + ' (' + MV_WINDOW_YEARS + ' June-30 filing cycles). ' +
+        text: 'Market vitality analysis for ' + label + '. Short-to-midterm focus: calendar years ' +
+          yStartCal + '–' + yEndCal + ' (' + mvW + ' June-30 filing cycles). ' +
           'FDIC pull includes ' + trendWin.length + ' year(s) with data in that window' +
           (trend.length > trendWin.length ? '; ' + trend.length + ' years total in the result' : '') +
           '. Latest filing year ' + latest.year + ': about $' + bLatestR +
@@ -1938,7 +2185,7 @@
           var cagr = (Math.pow(latestW.depositsThousands / firstW.depositsThousands, 1 / span) - 1) * 100;
           insights.push({
             priority: 8,
-            text: 'Multi-year arc (same ' + MV_WINDOW_YEARS + '-year window): from ' + firstW.year + ' to ' + latestW.year +
+            text: 'Multi-year arc (same ' + mvW + '-year window): from ' + firstW.year + ' to ' + latestW.year +
               ', the deposit aggregate moved ' +
               (totalPct >= 0 ? 'up' : 'down') + ' about ' + Math.abs(Math.round(totalPct * 10) / 10) +
               '% over ' + span + ' year(s) (~' + (Math.round(cagr * 100) / 100) + '% annualized).'
@@ -1958,6 +2205,12 @@
         text: 'Market vitality: no FDIC SOD branch aggregate for ' + label +
           ' — check ZIP, city spelling, or state. FSBI below may still apply for the resolved state (statewide series).'
       });
+    }
+
+    for (var ci = 0; ci < cbsaLines.length; ci++) insights.push(cbsaLines[ci]);
+
+    if (result.cbsa && result.cbsa.profile && result.cbsa.profile.error) {
+      insights.push({ priority: 5, text: 'Census ACS profile unavailable: ' + result.cbsa.profile.error });
     }
 
     for (var fi = 0; fi < fsbiLines.length; fi++) insights.push(fsbiLines[fi]);

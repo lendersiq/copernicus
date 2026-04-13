@@ -94,7 +94,21 @@
     /** Register agents so the app can list and run them */
     registry: [],
     register: function (agent) {
-      if (!agent || !agent.id) return this;
+      if (!agent) {
+        try { console.error('[Copernicus] register() called with null/undefined agent'); } catch (e) {}
+        return this;
+      }
+      if (!agent.id || typeof agent.id !== 'string') {
+        try { console.error('[Copernicus] register(): agent missing string id —', agent); } catch (e) {}
+        return this;
+      }
+      if (!agent.name) {
+        try { console.warn('[Copernicus] register(): agent "' + agent.id + '" has no name'); } catch (e) {}
+      }
+      if (typeof agent.run !== 'function') {
+        try { console.error('[Copernicus] register(): agent "' + agent.id + '" has no run() function'); } catch (e) {}
+        return this;
+      }
       for (var i = 0; i < this.registry.length; i++) {
         if (this.registry[i].id === agent.id) {
           this.registry[i] = agent;

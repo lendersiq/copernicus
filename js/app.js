@@ -91,11 +91,16 @@
     if (aiPanel) aiPanel.style.display = 'none';
 
     if (bodyEl) {
+      var needsDataSection = !!(
+        (agent.requiredDataTypes && agent.requiredDataTypes.length) ||
+        (agent.optionalDataTypes && agent.optionalDataTypes.length)
+      );
       bodyEl.innerHTML =
-        '<div class="agent-section">' +
-          '<div class="agent-section-title">Source data (in-memory only)</div>' +
-          '<div id="source-data-files" class="source-data-list"></div>' +
-        '</div>' +
+        (needsDataSection
+          ? '<div class="agent-section" id="source-data-section">' +
+              '<div id="source-data-files"></div>' +
+            '</div>'
+          : '') +
         '<div id="market-vitality-section" class="agent-section" style="display:none;">' +
           '<div class="agent-section-title">Market geography</div>' +
           '<p style="font-size:.82rem;color:var(--muted);margin:0 0 .75rem 0;line-height:1.45;">' +
@@ -212,45 +217,86 @@
 
   /* ── Result display ───────────────────────────────────────────────── */
 
+  /** Strip markdown bold/code markers so disclaimers read cleanly as plain text. */
+  function stripInlineMarkdown(s) {
+    return String(s || '').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1');
+  }
+
+  function renderDisclaimerEl(text) {
+    var d = document.createElement('details');
+    d.className = 'result-disclaimer';
+    var sumEl = document.createElement('summary');
+    sumEl.textContent = 'Sources & notes';
+    d.appendChild(sumEl);
+    var body = document.createElement('div');
+    body.className = 'result-disclaimer-body';
+    body.textContent = stripInlineMarkdown(text);
+    d.appendChild(body);
+    return d;
+  }
+
+  function renderDataToggle(jsonRoot) {
+    var d = document.createElement('details');
+    d.className = 'result-data-toggle';
+    var sumEl = document.createElement('summary');
+    sumEl.textContent = 'Raw data';
+    d.appendChild(sumEl);
+    d.appendChild(jsonRoot);
+    return d;
+  }
+
   function showResult(result, error) {
     var elResult = el('result-text');
-    var elJson = el('result-json');
+    if (!elResult) return;
+    elResult.innerHTML = '';
+    elResult.className = '';
+
     if (error) {
-      if (elResult) { elResult.textContent = error; elResult.className = 'result-error'; }
-      if (elJson) elJson.innerHTML = '';
+      elResult.className = 'result-error';
+      var errEl = document.createElement('div');
+      errEl.className = 'result-error-msg';
+      errEl.textContent = error;
+      elResult.appendChild(errEl);
       return;
     }
-    if (elResult) elResult.className = '';
+
+    var disc = result && (result.disclaimer || result.riskDisclaimer);
+    var jsonTree = result ? buildJsonTree(result, null, true) : null;
+
     if (result && result.needsBankersIqKey && result.error) {
-      if (elResult) {
-        var bq = result.error;
-        if (result.riskDisclaimer) bq += '\n\n' + result.riskDisclaimer;
-        elResult.textContent = bq;
-        elResult.className = '';
-      }
+      var bqEl = document.createElement('div');
+      bqEl.className = 'result-summary';
+      bqEl.textContent = result.error;
+      elResult.appendChild(bqEl);
+
     } else if (result && result.error) {
-      if (elResult) {
-        var errTxt = result.error;
-        if (result.disclaimer) errTxt += '\n\n' + result.disclaimer;
-        elResult.textContent = errTxt;
-        elResult.className = 'result-error';
-      }
+      elResult.className = 'result-error';
+      var eEl = document.createElement('div');
+      eEl.className = 'result-error-msg';
+      eEl.textContent = result.error;
+      elResult.appendChild(eEl);
+
     } else if (result && result.summary) {
-      if (elResult) {
-        var head = result.summary;
-        if (result.riskDisclaimer) head += '\n\n' + result.riskDisclaimer;
-        if (result.disclaimer) head += '\n\n' + result.disclaimer;
-        elResult.textContent = head;
-      }
+      var sEl = document.createElement('div');
+      sEl.className = 'result-summary';
+      sEl.textContent = result.summary;
+      elResult.appendChild(sEl);
+
     } else if (result && result.customerCount != null) {
-      if (elResult) elResult.textContent = 'Processed ' + result.customerCount + ' customers.';
+      var cEl = document.createElement('div');
+      cEl.className = 'result-summary';
+      cEl.textContent = result.customerCount + ' customer' + (result.customerCount !== 1 ? 's' : '') + ' processed.';
+      elResult.appendChild(cEl);
+
     } else {
-      if (elResult) elResult.textContent = 'Done.';
+      var doneEl = document.createElement('div');
+      doneEl.className = 'result-summary';
+      doneEl.textContent = 'Done.';
+      elResult.appendChild(doneEl);
     }
-    if (elJson) {
-      elJson.innerHTML = '';
-      elJson.appendChild(buildJsonTree(result, null, true));
-    }
+
+    if (disc) elResult.appendChild(renderDisclaimerEl(disc));
+    if (jsonTree) elResult.appendChild(renderDataToggle(jsonTree));
   }
 
   /* ── JSON tree viewer ────────────────────────────────────────────── */
@@ -527,82 +573,96 @@
     });
   }
 
-  /* ── Source data display (files required by current agent) ────────── */
+  /* -- Source data chip display (agent-scoped, required + optional only) */
 
   function sourceDataTypeLabel(t) {
-    if (!t) return '—';
+    if (!t) return '\u2014';
     if (t === '__any_csv__') return 'Any CSV';
     if (t === 'cd') return 'CD';
-    if (t === 'customers') return 'Customer information';
-    if (t === 'mortgages') return 'Mortgage loans';
+    if (t === 'customers') return 'Customers';
+    if (t === 'mortgages') return 'Mortgages';
     return t.charAt(0).toUpperCase() + t.slice(1);
   }
 
   function updateSourceDataDisplay() {
     var container = el('source-data-files');
     if (!container) return;
-    if (!CSVLoader || !CSVLoader.getInMemoryStore) {
-      container.innerHTML =
-        '<div>No source data in memory. Choose <strong>Run research</strong> to select files.</div>';
-      return;
-    }
-    var mem = CSVLoader.getInMemoryStore();
-    if (!mem.files || !mem.files.length) {
-      container.innerHTML =
-        '<div>No source data in memory. Choose <strong>Run research</strong> to select files.</div>';
-      return;
-    }
 
     var agent = LA.getAgent(currentAgentId);
-    var required = agent && agent.requiredDataTypes && agent.requiredDataTypes.length
-      ? agent.requiredDataTypes
-      : null;
-    var optional = agent && agent.optionalDataTypes && agent.optionalDataTypes.length
-      ? agent.optionalDataTypes
-      : [];
-    var showTypes = null;
-    if (required && required.length) {
-      showTypes = required.slice();
-      for (var si = 0; si < optional.length; si++) {
-        if (showTypes.indexOf(optional[si]) === -1) showTypes.push(optional[si]);
-      }
-    }
+    var required = (agent && agent.requiredDataTypes && agent.requiredDataTypes.length)
+      ? agent.requiredDataTypes.slice() : [];
+    var optional = (agent && agent.optionalDataTypes && agent.optionalDataTypes.length)
+      ? agent.optionalDataTypes.slice() : [];
 
-    var files = mem.files.slice();
-    if (showTypes) {
-      files = files.filter(function (f) {
-        return f.type && showTypes.indexOf(f.type) !== -1;
-      });
-      files.sort(function (a, b) {
-        return showTypes.indexOf(a.type) - showTypes.indexOf(b.type);
-      });
-    }
-
-    if (!files.length) {
-      var need = showTypes && showTypes.length
-        ? showTypes.map(function (t) {
-          var lab = sourceDataTypeLabel(t);
-          return optional.indexOf(t) !== -1 ? lab + ' (optional)' : lab;
-        }).join(', ')
-        : 'this agent’s required sources';
-      container.innerHTML =
-        '<div>Nothing ingested for <strong>' + escapeHtml(need) + '</strong> yet. ' +
-        'Choose <strong>Run research</strong> to add files. (Other files may be in memory but are not shown here.)</div>';
+    /* Agent needs no data -- hide section */
+    if (!required.length && !optional.length) {
+      var sec = el('source-data-section');
+      if (sec) sec.style.display = 'none';
       return;
     }
 
-    var html = '';
-    files.forEach(function (f) {
-      var status = f.rowCount > 0
-        ? '<span style="color:var(--success);">' + f.rowCount + ' rows</span>'
-        : '<span style="color:var(--error);">0 rows</span>';
-      html += '<div><strong>' + escapeHtml(f.name) + '</strong> — ' +
-        escapeHtml(sourceDataTypeLabel(f.type)) + ' · ' + status + '</div>';
+    var mem = (CSVLoader && CSVLoader.getInMemoryStore) ? CSVLoader.getInMemoryStore() : null;
+    var ingestedByType = {};
+    if (mem && mem.files) {
+      mem.files.forEach(function (f) {
+        if (f.type) ingestedByType[f.type] = f;
+      });
+    }
+
+    /* Ordered list: required first, then optional-only */
+    var allTypes = required.slice();
+    optional.forEach(function (t) {
+      if (allTypes.indexOf(t) === -1) allTypes.push(t);
     });
-    container.innerHTML = html;
+
+    var requiredLoaded = required.filter(function (t) {
+      return ingestedByType[t] && ingestedByType[t].rowCount > 0;
+    }).length;
+    var totalLoaded = allTypes.filter(function (t) {
+      return ingestedByType[t] && ingestedByType[t].rowCount > 0;
+    }).length;
+    var allRequiredOk = requiredLoaded === required.length;
+
+    var tallyText = totalLoaded + '\u202f/\u202f' + allTypes.length;
+    var tallyClass = 'source-chips-tally' + (allRequiredOk && required.length ? ' all-ok' : '');
+
+    var chipsHtml = '';
+    allTypes.forEach(function (t) {
+      var f = ingestedByType[t];
+      var isOptOnly = optional.indexOf(t) !== -1 && required.indexOf(t) === -1;
+      var loaded = !!(f && f.rowCount > 0);
+      var chipClass = 'source-chip' + (loaded ? ' chip-loaded' : '') + (isOptOnly ? ' chip-optional' : '');
+      var dotClass = 'chip-dot' + (loaded ? ' dot-ok' : '');
+      var typeLabel = sourceDataTypeLabel(t);
+      var tipText = loaded
+        ? f.name + ' \u2014 ' + f.rowCount.toLocaleString() + ' rows'
+        : typeLabel + (isOptOnly ? ' (optional) \u2014 not loaded' : ' \u2014 not loaded');
+
+      var inner = '<span class="' + dotClass + '"></span>';
+      if (loaded) {
+        inner += '<span class="chip-name" title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + '</span>';
+        inner += '<span class="chip-sep">\u00b7</span>';
+        inner += '<span class="chip-meta">' + escapeHtml(typeLabel) + '</span>';
+        inner += '<span class="chip-sep">\u00b7</span>';
+        inner += '<span class="chip-rows">' + f.rowCount.toLocaleString() + '</span>';
+      } else {
+        inner += '<span class="chip-meta">' + escapeHtml(typeLabel) + '</span>';
+        if (isOptOnly) inner += '<span class="chip-tag">opt</span>';
+      }
+      chipsHtml += '<div class="' + chipClass + '" title="' + escapeHtml(tipText) + '">' + inner + '</div>';
+    });
+
+    container.innerHTML =
+      '<div class="source-chips-wrap">' +
+        '<div class="source-chips-header">' +
+          '<span class="source-chips-label">Data sources</span>' +
+          '<span class="' + tallyClass + '">' + escapeHtml(tallyText) + '</span>' +
+        '</div>' +
+        '<div class="source-chips">' + chipsHtml + '</div>' +
+      '</div>';
   }
 
-  /* ── Data modal ───────────────────────────────────────────────────── */
+  /* -- Data modal ----------------------------------------------------- */
 
   var OPTIONAL_SOURCE_HINTS = {
     mortgages: 'Adds mortgage rows to spread results when present.',
