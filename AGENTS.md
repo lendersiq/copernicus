@@ -4,6 +4,8 @@ This document is the **contract** for building agents so humans and tools can ad
 
 **Step-by-step tutorial (Skills, tools, `queryContext`, load order):** [`js/agents/agentDev.md`](js/agents/agentDev.md).
 
+**Determinism, Ask vs. agents, reproducibility, APIs vs. hallucination:** [`context/determinism.md`](context/determinism.md).
+
 ## Architecture (mental model)
 
 | Layer | Role |
@@ -59,9 +61,13 @@ Use **`return Promise.resolve(…)`** or **`return fetch(…).then(…)`** when 
 
 **`js/tools/fdic-sod.js`** calls **`https://api.fdic.gov/banks/sod`** with Elasticsearch-style **`filters`**: **`ZIPBR:#####`** only for ZIP (no `STALP` AND — avoids dropping rows that still match the public SOD ZIP extract), or **`CITYBR:"City" AND STALP:XX`**. Paginates (`limit` / `offset`); sums **DEPSUMBR** (else **DEPSUM**) in **$ thousands** by **YEAR**. Optional **`api_key`**. Browser **CORS** must allow `api.fdic.gov`.
 
+**CBSA (market vitality, ZIP mode):** **`js/tools/census-cbsa.js`** maps ZIP → CBSA code via **`Copernicus.ZipCbsaData`** (**`js/data/zip5-to-cbsa.js`**) and title via **`Copernicus.CbsaNameData`** (**`js/data/cbsa-code-to-name.js`**). Both are built by **`scripts/build-zip5-cbsa.py`**: ZCTA5–CBSA from the Census **[2010 relationship file](https://www2.census.gov/geo/docs/maps-data/data/rel/zcta_cbsa_rel_10.txt)** (dominant **ZPOPPCT**); NAME list from **`api.census.gov`** ACS 5-year at build time only (browser never calls Census — **`file://` OK**).
+
 ### Treasury curve (interest-rate risk)
 
-**`js/tools/fred-client.js`** fetches the monthly curve only from **[BankersIQ trates](https://bankersiq.com/api/luci/trates/)** (vendor URL path `/api/luci/trates/`) with **`api_key`** (CORS-friendly JSON). **`LA.tools.loadTreasuryCurveFromKeyRing()`** reads the key from **`Copernicus.KeyRing`** (`KeyRingIds.BANKERSIQ_TRATES_API` → stored id `bankersiq_luci_api`) and returns the same Promise as **`buildMonthlyTreasuryCurve`**. Override base URL (no query string): **`Copernicus.Fred.bankersIqTratesUrl`**.
+**`js/tools/fred-client.js`** builds a 1–360 month curve via the **BankersIQ Copernicus proxy** (`https://bankersiq.com/api/copernicus/proxy/`): fetches 10 FRED constant-maturity series (`DGS3MO`, `DGS6MO`, `DGS1`, `DGS2`, `DGS3`, `DGS5`, `DGS7`, `DGS10`, `DGS20`, `DGS30`) in parallel, each as `?_key=KEY&service=fred&endpoint=series/observations&series_id=SERIES&limit=1&sort_order=desc`, then **linearly interpolates** between knots; months 1–2 use the 3-month rate (flat). **`LA.tools.loadTreasuryCurveFromKeyRing()`** reads the key from **`Copernicus.KeyRing`** (`KeyRingIds.BANKERSIQ_TRATES_API` → stored id `bankersiq_luci_api`) and calls **`buildTreasuryCurveFromFredProxy`**. Override proxy base URL (no query string): **`Copernicus.Fred.copernicusProxyUrl`**.
+
+Legacy path: **`buildMonthlyTreasuryCurve`** / **`fetchBankersIqTreasuryCurve`** still call `/api/luci/trates/` directly (`api_key=`); override: **`Copernicus.Fred.bankersIqTratesUrl`**. Use these only if the proxy is unavailable.
 
 Loan spread rows are built in **`js/tools/loan-spread.js`** (`buildLoanTreasurySpreadRows`, `summarizeTreasuryCurveForResult`). Shared customer-directory lookups live in **`js/tools/customer-directory.js`**.
 
@@ -100,4 +106,4 @@ Use **`Copernicus.KeyRing`** (`js/tools/key-ring.js`): IndexedDB with localStora
 | `js/agents/share-of-wallet.js` | Multi required types, no external API. |
 | `js/agents/loan-profitability.js` | Required + **optional** type; thin orchestration — **`loadTreasuryCurveFromKeyRing`**, **`buildLoanTreasurySpreadRows`**, **`summarizeIngestedFiles`**; **`riskDisclaimer`** on skill **`banking.loan-profitability`**. |
 | `js/agents/field-signal-test.js` | Audits **field → role** mappings per ingested file; `fieldSignalLexicon`, `fieldSignalReports`. |
-| `js/agents/market-vitality.js` | **No CSV** — UI: **ZIP, state, city** only. **FDIC SOD** (`js/tools/fdic-sod.js`); **`inferUsStateFromZip`** + **`js/data/zip5-to-state.js`** when state is blank. **FSBI**: one call `state` + `inflationAdjusted` (no period/subSector) → full ALL/ALL series per [BankersIQ](https://bankersiq.com/api/FSBI/); `js/tools/fsbi-client.js`; optional **`KeyRingIds.BANKERSIQ_TRATES_API`**. ZIP data: `scripts/build-zip5-state.py`. |
+| `js/agents/market-vitality.js` | **No CSV** — UI: **ZIP, state, city** only. **FDIC SOD** (`js/tools/fdic-sod.js`); **`inferUsStateFromZip`** + **`js/data/zip5-to-state.js`** when state is blank. **CBSA** (ZIP only): **`js/data/zip5-to-cbsa.js`** + **`js/data/cbsa-code-to-name.js`** + **`js/tools/census-cbsa.js`**; `scripts/build-zip5-cbsa.py` (ZCTA file + ACS NAME at build time). **FSBI**: one call `state` + `inflationAdjusted` (no period/subSector) → full ALL/ALL series per [BankersIQ](https://bankersiq.com/api/FSBI/); `js/tools/fsbi-client.js`; optional **`KeyRingIds.BANKERSIQ_TRATES_API`**. ZIP→state: `scripts/build-zip5-state.py`. |

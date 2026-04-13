@@ -38,3 +38,7 @@ To use ingested CSV data in an agent, use `CSVLoader.getInMemoryStore()` (or `re
 ## Authoring agents
 
 See **`AGENTS.md`** for the full contract (`requiredDataTypes`, `ensureIngested`, `queryContext`, async patterns, and secrets).
+
+## Determinism and Ask vs. agents
+
+The default pipeline is **deterministic** and **data-grounded**; agents do not depend on Ask. For a precise distinction (reproducibility, stochastic sampling, API-driven variability vs. hallucination), see **`context/determinism.md`**.

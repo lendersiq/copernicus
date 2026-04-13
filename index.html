@@ -98,18 +98,110 @@
     .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
     .btn-primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
     .btn-primary:disabled { opacity: .6; cursor: not-allowed; }
-    .source-data-list { font-size: .85rem; color: var(--muted); margin-top: .5rem; }
-    .source-data-list div { padding: .25rem 0; border-bottom: 1px solid var(--border); }
-    .source-data-list div:last-child { border-bottom: none; }
+    /* ── Source data chips ────────────────────────────────── */
+    .source-chips-wrap { margin-top: .35rem; }
+    .source-chips-header {
+      display: flex; align-items: center; gap: .5rem;
+      margin-bottom: .45rem;
+    }
+    .source-chips-label {
+      font-size: .72rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .05em; color: var(--muted);
+    }
+    .source-chips-tally {
+      font-size: .7rem; padding: .1rem .42rem; border-radius: 8px;
+      background: var(--border); color: var(--muted); font-weight: 500;
+      line-height: 1.4;
+    }
+    .source-chips-tally.all-ok {
+      background: rgba(124,184,122,.15); color: var(--success);
+    }
+    .source-chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+    .source-chip {
+      display: inline-flex; align-items: center; gap: .32rem;
+      padding: .22rem .55rem .22rem .38rem; border-radius: 20px;
+      font-size: .76rem; line-height: 1.35;
+      border: 1px dashed var(--border);
+      background: transparent; color: var(--muted);
+      max-width: 260px; transition: border-color .15s, background .15s;
+    }
+    .source-chip.chip-loaded {
+      border-style: solid;
+      border-color: rgba(124,184,122,.3);
+      background: rgba(124,184,122,.05);
+      color: var(--text);
+    }
+    .source-chip.chip-optional {
+      opacity: .75;
+    }
+    .chip-dot {
+      width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+      background: var(--border);
+    }
+    .chip-dot.dot-ok { background: var(--success); }
+    .chip-name {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      max-width: 130px; font-weight: 500;
+    }
+    .chip-sep { color: var(--border); flex-shrink: 0; }
+    .chip-meta { color: var(--muted); font-size: .71rem; flex-shrink: 0; white-space: nowrap; }
+    .chip-rows { color: var(--success); font-size: .71rem; flex-shrink: 0; white-space: nowrap; }
+    .chip-tag {
+      font-size: .66rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .03em; color: var(--muted); flex-shrink: 0;
+      background: var(--border); padding: .05rem .3rem; border-radius: 4px;
+    }
     .agent-actions { margin-top: 1rem; display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; }
-    #result-text { font-weight: 500; margin-bottom: .5rem; }
-    #result-text.result-error { color: var(--error); }
-    #result-json {
-      width: 100%; max-height: 480px; overflow-y: auto; padding: .75rem;
+    #result-text { margin-bottom: .35rem; }
+    #result-text.result-error { color: var(--error); font-weight: 500; }
+    .result-summary {
+      font-size: .82rem; color: var(--muted); line-height: 1.5;
+      margin-bottom: .5rem; font-weight: 400;
+    }
+    .result-error-msg { font-weight: 500; color: var(--error); }
+    .result-disclaimer {
+      font-size: .74rem; margin-top: .35rem;
+    }
+    .result-disclaimer summary {
+      cursor: pointer; color: var(--muted); font-size: .72rem;
+      list-style: none; display: inline-flex; align-items: center; gap: .3rem;
+      user-select: none; outline: none;
+    }
+    .result-disclaimer summary::-webkit-details-marker { display: none; }
+    .result-disclaimer summary::before {
+      content: '▸'; font-size: .62rem; color: var(--muted);
+      transition: transform .15s; display: inline-block;
+    }
+    .result-disclaimer[open] summary::before { transform: rotate(90deg); }
+    .result-disclaimer-body {
+      margin-top: .35rem; padding: .6rem .75rem;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--muted); font-size: .75rem;
+      line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+    }
+    .result-data-toggle {
+      font-size: .72rem; margin-top: .35rem;
+    }
+    .result-data-toggle summary {
+      cursor: pointer; color: var(--muted); font-size: .72rem;
+      list-style: none; display: inline-flex; align-items: center; gap: .3rem;
+      user-select: none; outline: none;
+    }
+    .result-data-toggle summary::-webkit-details-marker { display: none; }
+    .result-data-toggle summary::before {
+      content: '▸'; font-size: .62rem; color: var(--muted);
+      transition: transform .15s; display: inline-block;
+    }
+    .result-data-toggle[open] summary::before { transform: rotate(90deg); }
+    /* ── JSON tree ─────────────────────────────────────────── */
+    .result-data-toggle > div {
+      width: 100%; max-height: 480px;
+      overflow-x: auto; overflow-y: auto;
+      padding: .75rem;
       background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
       font-family: ui-monospace, monospace; font-size: .8rem; line-height: 1.55;
+      margin-top: .35rem;
     }
-    /* ── JSON tree ─────────────────────────────────────────── */
     .jt-node { padding-left: 1.2rem; }
     .jt-root { padding-left: 0; }
     .jt-row { white-space: nowrap; }
@@ -229,12 +321,6 @@
       <div id="agent-body"></div>
     </div>
 
-    <div id="panel-result" class="panel" style="display: none;">
-      <h2>Result</h2>
-      <div id="result-text"></div>
-      <div id="result-json"></div>
-    </div>
-
     <div id="panel-ai" class="panel" style="display: none;">
       <div class="ai-header">
         <h2>AI Insights</h2>
@@ -250,6 +336,10 @@
         <div id="ai-query-response" class="ai-content" style="margin-top: .75rem;"></div>
       </div>
       <div id="ai-note" class="ai-note"></div>
+    </div>
+
+    <div id="panel-result" class="panel" style="display: none;">
+      <div id="result-text"></div>
     </div>
   </div>
 
@@ -272,6 +362,9 @@
 
   <script src="js/framework.js"></script>
   <script src="js/data/zip5-to-state.js"></script>
+  <script src="js/data/zip5-to-cbsa.js"></script>
+  <script src="js/data/zip5-to-city.js"></script>
+  <script src="js/data/cbsa-code-to-name.js"></script>
   <script src="skills/banking.js"></script>
   <script src="context/local-market.js"></script>
   <script src="context/soul.js"></script>
@@ -283,6 +376,8 @@
   <script src="js/tools/fred-client.js"></script>
   <script src="js/tools/loan-spread.js"></script>
   <script src="js/tools/fdic-sod.js"></script>
+  <script src="js/tools/census-cbsa.js"></script>
+  <script src="js/tools/census-acs.js"></script>
   <script src="js/tools/fsbi-client.js"></script>
   <script src="js/agents/checking-profitability.js"></script>
   <script src="js/agents/loan-profitability.js"></script>
