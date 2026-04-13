@@ -1311,6 +1311,111 @@
     });
   }
 
+  /* ── Generic column-role discovery (stem-aware) ──────────────────── */
+  /*
+   * discoverColumnRoles(headers, signalBundle)
+   *
+   * Matches each role in `signalBundle` (an object whose values are arrays of
+   * alias phrases, e.g. from banking.profit-column-signals.headerSignals) to
+   * the best-fitting column index in `headers` using:
+   *   1. Exact / substring match on normalised headers
+   *   2. Stemmed path match
+   *   3. Multi-token stem-set subset match
+   *
+   * Stem engine: uses Copernicus.AI.stem (Porter-style) when available;
+   * falls back to a built-in suffix-stripping function so the tool works
+   * regardless of script load order.
+   *
+   * Returns { role: columnIndex, ... } — only roles with a match are included.
+   * Replaces the standalone js/tools/profit-column-discovery.js.
+   */
+
+  function _dcrStemFallback(word) {
+    var w = String(word || '').toLowerCase();
+    if (w.length < 4) return w;
+    var rules = [
+      ['ational','ate'],['tional','tion'],['ization','ize'],['fulness','ful'],
+      ['iveness','ive'],['ation','ate'],['ments',''],['ness',''],
+      ['ingly',''],['edly',''],['ing',''],['ies','y'],['ied','y'],
+      ['ed',''],['ly',''],['es',''],['s','']
+    ];
+    for (var i = 0; i < rules.length; i++) {
+      var suf = rules[i][0];
+      if (w.length > suf.length + 2 && w.slice(-suf.length) === suf) {
+        return w.slice(0, -suf.length) + rules[i][1];
+      }
+    }
+    return w;
+  }
+
+  function _dcrGetStemFn() {
+    var LA = global.Copernicus;
+    return (LA && LA.AI && typeof LA.AI.stem === 'function') ? LA.AI.stem : _dcrStemFallback;
+  }
+
+  function _dcrNormHeader(h) {
+    return String(h || '').toLowerCase().replace(/[\s\-\.]+/g, '_').trim();
+  }
+
+  function _dcrStemPath(stemFn, underscored) {
+    return underscored.split('_').filter(Boolean).map(function (t) {
+      return stemFn(t.toLowerCase());
+    }).join('_');
+  }
+
+  function _dcrStemTokenSet(stemFn, underscored) {
+    var out = {};
+    underscored.split('_').filter(Boolean).forEach(function (t) {
+      var s = stemFn(t.toLowerCase());
+      if (s) out[s] = true;
+    });
+    return out;
+  }
+
+  function _dcrHeaderMatchesSignal(stemFn, rawHeader, signalPhrase) {
+    var h   = _dcrNormHeader(rawHeader);
+    var sig = _dcrNormHeader(signalPhrase);
+    if (!h || !sig) return false;
+    if (h === sig) return true;
+    if (h.indexOf(sig) !== -1) return true;
+    if (sig.length >= 4 && sig.indexOf(h) !== -1) return true;
+
+    var hPath = _dcrStemPath(stemFn, h);
+    var sPath = _dcrStemPath(stemFn, sig);
+    if (hPath === sPath) return true;
+    if (sPath.length >= 4 && hPath.indexOf(sPath) !== -1) return true;
+    if (hPath.length >= 4 && sPath.indexOf(hPath) !== -1) return true;
+
+    var sigParts = sig.split('_').filter(Boolean);
+    if (sigParts.length < 2) return false;
+    var hSet = _dcrStemTokenSet(stemFn, h);
+    for (var i = 0; i < sigParts.length; i++) {
+      var st = stemFn(sigParts[i].toLowerCase());
+      if (!st || st.length < 2 || !hSet[st]) return false;
+    }
+    return true;
+  }
+
+  function discoverColumnRoles(headers, signalBundle) {
+    var map = {};
+    if (!signalBundle || !headers || !headers.length) return map;
+    var stemFn = _dcrGetStemFn();
+    for (var role in signalBundle) {
+      var aliases = signalBundle[role];
+      if (!aliases || !aliases.length) continue;
+      for (var i = 0; i < headers.length; i++) {
+        for (var s = 0; s < aliases.length; s++) {
+          if (_dcrHeaderMatchesSignal(stemFn, headers[i], aliases[s])) {
+            map[role] = i;
+            break;
+          }
+        }
+        if (map[role] != null) break;
+      }
+    }
+    return map;
+  }
+
   /* ── Public API ───────────────────────────────────────────────────── */
 
   var CSVLoader = {
@@ -1348,6 +1453,7 @@
     isPrimary: function (obj) { return detectBoolean(obj && obj.primary); },
     hasDirectDeposit: function (obj) { return detectBoolean(obj && obj.directDeposit); },
     getIncome: function (obj) { return inferNumeric(obj && obj.income); },
+    discoverColumnRoles: discoverColumnRoles,
     FILE_TYPES: FILE_TYPES,
     FIELD_ROLES: FIELD_ROLES,
     SEMANTIC_CONCEPTS: SEMANTIC_CONCEPTS,
@@ -1357,6 +1463,7 @@
   if (global.Copernicus) {
     global.Copernicus.tools = global.Copernicus.tools || {};
     global.Copernicus.tools.CSVLoader = CSVLoader;
+    global.Copernicus.tools.discoverColumnRoles = discoverColumnRoles;
   }
   global.CSVLoader = CSVLoader;
 })(typeof window !== 'undefined' ? window : this);
