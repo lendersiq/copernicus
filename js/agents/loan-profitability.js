@@ -39,7 +39,11 @@
       totalBal += all[j].balance;
     }
 
-    var treasSrc = curve.curveSource === 'bankersiq_trates' ? 'BankersIQ Treasury (trates)' : 'Treasury';
+    var treasSrc = curve.curveSource === 'fred_proxy'
+      ? 'FRED via BankersIQ proxy (interpolated)'
+      : curve.curveSource === 'bankersiq_trates'
+        ? 'BankersIQ Treasury (trates)'
+        : 'Treasury';
     var summary = all.length + ' position' + (all.length !== 1 ? 's' : '') +
       ' · est. net spread next month $' + Math.round(totalNet * 100) / 100 +
       ' · est. net spread remaining (sum) $' + Math.round(totalNetLife * 100) / 100 +
@@ -115,7 +119,7 @@
           error: msg,
           optionalDataPresent: opt,
           riskDisclaimer: disclaimer,
-          hint: 'Check network and BankersIQ key — https://bankersiq.com/api/luci/trates/ (see AGENTS.md).'
+          hint: 'Check network and BankersIQ key — proxy: https://bankersiq.com/api/copernicus/proxy/ (see AGENTS.md).'
         };
       });
     }

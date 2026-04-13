@@ -43,14 +43,9 @@
       p.checkingBal += a.balance;
       p.totalDeposits += a.balance;
       if (a.isPrimary) p.primaryChecking = true;
-      var loader = global.CSVLoader;
-      if (loader && loader.hasDirectDeposit && loader.hasDirectDeposit(a.raw && typeof a.raw === 'object' && !Array.isArray(a.raw) ? a.raw : {})) p.directDeposit = true;
-      if (a.raw && typeof a.raw === 'object' && !Array.isArray(a.raw) && a.raw.directDeposit !== undefined) {
-        if (loader && loader.detectBoolean ? loader.detectBoolean(a.raw.directDeposit) : false) p.directDeposit = true;
-      }
+      if (a.directDeposit) p.directDeposit = true;
       tenure(a);
-      var inc = loader && loader.getIncome ? loader.getIncome(a.raw && typeof a.raw === 'object' && !Array.isArray(a.raw) ? a.raw : {}) : null;
-      if (inc != null) p.income = inc;
+      if (a.income != null) p.income = a.income;
     });
 
     (state.savings || []).forEach(function (a) {
@@ -141,7 +136,15 @@
         return { needsData: true, missingTypes: check.missingTypes || [], error: check.error || 'Missing data' };
       }
 
+      var depthSkill = LA.Skills.get('banking.relationship-depth');
+      var segSkill   = LA.Skills.get('banking.segmentation');
+      var sowSkill   = LA.Skills.get('banking.share-of-wallet');
+      if (!depthSkill) return { error: 'Required skill banking.relationship-depth is not registered (check skills/banking.js load order).' };
+      if (!segSkill)   return { error: 'Required skill banking.segmentation is not registered (check skills/banking.js load order).' };
+      if (!sowSkill)   return { error: 'Required skill banking.share-of-wallet is not registered (check skills/banking.js load order).' };
+
       var state = LA.Data.getState();
+      var customerDirectory = state.customerDirectory || {};
       var ids = allCustomerIds(state);
       var customers = [];
       var minS = null;
@@ -162,8 +165,13 @@
         if (minS == null || sow < minS) minS = sow;
         if (maxS == null || sow > maxS) maxS = sow;
 
+        var displayName = customerDirectory[ids[i]] || '';
         var row = {
           customerId: ids[i],
+          customerName: displayName || null,
+          reference: displayName
+            ? displayName + ' (' + ids[i] + ')'
+            : String(ids[i]),
           shareOfWallet: Math.round(sow * 100) / 100,
           segment: seg ? seg.label : null,
           depthScore: ds,
@@ -177,10 +185,6 @@
         customers.push(row);
       }
 
-      var depthSkill = LA.Skills.get('banking.relationship-depth');
-      var segSkill = LA.Skills.get('banking.segmentation');
-      var sowSkill = LA.Skills.get('banking.share-of-wallet');
-
       var summary = ids.length + ' customer' + (ids.length !== 1 ? 's' : '') +
         (minS != null && maxS != null ? ' · SOW range ' + minS + ' – ' + maxS : '');
 
@@ -193,14 +197,8 @@
           skillId: 'banking.query-context',
           entityLabel: 'Customer',
           entityPlural: 'customers',
-          idFields: ['customerId', 'customer_id'],
-          insightsPrimaryKey: 'shareOfWallet',
-          fieldCatalog: [
-            { key: 'shareOfWallet', labels: ['sow', 'composite score', 'wallet score'], fmt: 'score' },
-            { key: 'depthScore', labels: ['depth', 'relationship depth'], fmt: 'score' },
-            { key: 'totalDeposits', labels: ['balance', 'balances', 'deposits', 'deposit balance', 'total deposits'], fmt: 'dollar' },
-            { key: 'totalLoans', labels: ['loans', 'loan balance', 'outstanding loans'], fmt: 'dollar' }
-          ]
+          idFields: ['reference', 'customerName', 'customerId', 'customer_id'],
+          insightsPrimaryKey: 'shareOfWallet'
         },
         skills: {
           relationshipDepth: depthSkill ? depthSkill.assumptions : null,

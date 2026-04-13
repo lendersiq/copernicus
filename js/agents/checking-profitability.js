@@ -1,7 +1,7 @@
 /**
  * Checking Profitability agent — checking account data plus a customer directory CSV
  * (customerId → name) for display and references. Discovers profitability columns from
- * raw checking headers via Copernicus.Skills + stem-aware discovery (profit-column-discovery.js).
+ * raw checking headers via Copernicus.Skills + CSVLoader.discoverColumnRoles (banking.profit-column-signals skill).
  * Assumptions from Copernicus.Skills.
  */
 (function (global) {
@@ -11,10 +11,13 @@
   if (!LA || !LA.Agent) return;
 
   function discoverProfitColumns(headers) {
-    if (LA.tools && typeof LA.tools.discoverCheckingProfitColumns === 'function') {
-      return LA.tools.discoverCheckingProfitColumns(headers, LA);
-    }
-    return {};
+    var discoverFn = LA.tools && LA.tools.discoverColumnRoles
+      ? LA.tools.discoverColumnRoles
+      : (global.CSVLoader && global.CSVLoader.discoverColumnRoles);
+    if (!discoverFn) return {};
+    var skill = LA.Skills && LA.Skills.get ? LA.Skills.get('banking.profit-column-signals') : null;
+    var bundle = skill && skill.headerSignals && skill.headerSignals.checkingProfitability;
+    return bundle ? discoverFn(headers, bundle) : {};
   }
 
   function numFromRaw(raw, colIdx) {
@@ -39,16 +42,25 @@
         };
       }
 
-      var fundingSkill = LA.Skills.get('banking.credit-for-funding') || { assumptions: {} };
-      var costSkill = LA.Skills.get('banking.processing-costs') || { assumptions: {} };
+      var fundingSkill = LA.Skills.get('banking.credit-for-funding');
+      var costSkill = LA.Skills.get('banking.processing-costs');
+      if (!fundingSkill) {
+        return { error: 'Required skill banking.credit-for-funding is not registered (check skills/banking.js load order).' };
+      }
+      if (!costSkill) {
+        return { error: 'Required skill banking.processing-costs is not registered (check skills/banking.js load order).' };
+      }
       var fa = fundingSkill.assumptions;
       var ca = costSkill.assumptions;
 
-      var ecrRate = fa.rate != null ? fa.rate : 0.03;
-      var perDeposit = ca.perDeposit != null ? ca.perDeposit : 0.25;
-      var perCheck = ca.perCheck != null ? ca.perCheck : 0.15;
-      var perNSF = ca.perNSF != null ? ca.perNSF : 3.00;
-      var acctMaint = ca.accountMaintenanceMonthly != null ? ca.accountMaintenanceMonthly : 8.00;
+      if (fa.rate == null) {
+        return { error: 'banking.credit-for-funding.assumptions.rate is not set — check skills/banking.js.' };
+      }
+      var ecrRate = fa.rate;
+      var perDeposit = ca.perDeposit != null ? ca.perDeposit : 0;
+      var perCheck = ca.perCheck != null ? ca.perCheck : 0;
+      var perNSF = ca.perNSF != null ? ca.perNSF : 0;
+      var acctMaint = ca.accountMaintenanceMonthly != null ? ca.accountMaintenanceMonthly : 0;
 
       var state = LA.Data.getState();
       var customerDirectory = state.customerDirectory || {};

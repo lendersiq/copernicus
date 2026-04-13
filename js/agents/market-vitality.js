@@ -11,7 +11,8 @@
   var DISCLAIMER =
     'Illustrative only: FDIC SOD branch deposits (June 30) and optional Fiserv Small Business Index (FSBI) via BankersIQ. ' +
     'Not a market recommendation or regulatory view. ZIP = ZIPBR; city = CITYBR. FSBI is often **state-level**; city-level series are uncommon. ' +
-    'CORS: api.fdic.gov and bankersiq.com must be reachable from the browser (use http(s) if file:// fails).';
+    'When you enter a ZIP, CBSA is from the Census **2010** ZCTA5–CBSA relationship (dominant population share); metro/micro **title** from static **cbsa-code-to-name.js** (ACS 5-year NAME, built offline by `scripts/build-zip5-cbsa.py`). City+state without ZIP does not resolve to CBSA here. ' +
+    'CORS: api.fdic.gov and bankersiq.com must be reachable from the browser for those APIs (use http(s) if file:// fails for them).';
 
   function formatBillionsFromThousands(thousands) {
     var b = Number(thousands) / 1000000;
@@ -209,12 +210,27 @@
                 { key: 'yoyPct', labels: ['growth', 'yoy', 'change', 'percent'], fmt: 'pctPoints' },
                 { key: 'salesIndexSa', labels: ['fsbi', 'sales index', 'small business sales'], fmt: 'score' },
                 { key: 'salesYoyPctSa', labels: ['fsbi sales yoy', 'small business yoy'], fmt: 'pctPoints' },
-                { key: 'transactionYoyPctSa', labels: ['fsbi transaction yoy', 'transaction yoy'], fmt: 'pctPoints' }
+                { key: 'transactionYoyPctSa', labels: ['fsbi transaction yoy', 'transaction yoy'], fmt: 'pctPoints' },
+                { key: 'medianHouseholdIncome', labels: ['income', 'median income', 'household income', 'hhi'], fmt: 'dollar' },
+                { key: 'population', labels: ['population', 'pop', 'residents'], fmt: 'int' },
+                { key: 'unemploymentRate', labels: ['unemployment', 'jobless', 'unemployment rate'], fmt: 'pctPoints' },
+                { key: 'medianHomeValue', labels: ['home value', 'median home', 'housing', 'home price'], fmt: 'dollar' }
               ]
             }
           };
 
-          return attachFsbiTrend(out, st, out.geo, out.depositTrend, biqKey);
+          var cbsaP =
+            LA.tools && LA.tools.censusCbsa && typeof LA.tools.censusCbsa.enrichResultWithCbsa === 'function'
+              ? LA.tools.censusCbsa.enrichResultWithCbsa(out)
+              : Promise.resolve(out);
+          return cbsaP.then(function (withCbsa) {
+            return attachFsbiTrend(withCbsa, st, withCbsa.geo, withCbsa.depositTrend, biqKey);
+          }).then(function (withFsbi) {
+            var cbsaTool = LA.tools && LA.tools.censusCbsa;
+            return (cbsaTool && typeof cbsaTool.attachAcsProfile === 'function')
+              ? cbsaTool.attachAcsProfile(withFsbi, biqKey)
+              : withFsbi;
+          });
         });
       }).catch(function (err) {
         var msg = String(err && err.message || err);
